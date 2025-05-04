@@ -44,19 +44,19 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                 <table className="w-full border-collapse">
                   <thead>
                     <tr>
-                      <th className="p-2 border"></th>
+                      <th className="p-2 border bg-green-500"></th>
                       {Array.from({ length: problem.demand.length }).map((_, index) => (
-                        <th key={`header-dest-${index}`} className="p-2 border">
+                        <th key={`header-dest-${index}`} className="p-2 border bg-green-500">
                           D{index + 1}
                         </th>
                       ))}
-                      <th className="p-2 border">Supply</th>
+                      <th className="p-2 border bg-yellow-100">Supply</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Array.from({ length: problem.supply.length }).map((_, sourceIndex) => (
                       <tr key={`row-${sourceIndex}`}>
-                        <th className="p-2 border">S{sourceIndex + 1}</th>
+                        <th className="p-2 border bg-green-500">S{sourceIndex + 1}</th>
                         {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
                           const allocation = solution.allocations.find(
                             (a) => a.source === sourceIndex && a.destination === destIndex,
@@ -65,7 +65,7 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                           return (
                             <td
                               key={`cell-${sourceIndex}-${destIndex}`}
-                              className={`p-2 border text-center ${allocation ? "bg-blue-600/10" : ""}`}
+                              className={`p-2 border text-center ${allocation ? "bg-orange-100" : ""}`}
                             >
                               {allocation ? (
                                 <div>
@@ -82,19 +82,19 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                             </td>
                           )
                         })}
-                        <td className="p-2 border text-center font-medium">
+                        <td className="p-2 border text-center font-medium bg-yellow-50">
                           {problem.supply[sourceIndex]}
                         </td>
                       </tr>
                     ))}
                     <tr>
-                      <th className="p-2 border">Demand</th>
+                      <th className="p-2 border bg-yellow-100">Demand</th>
                       {problem.demand.map((d, index) => (
-                        <td key={`demand-${index}`} className="p-2 border text-center font-medium">
+                        <td key={`demand-${index}`} className="p-2 border text-center font-medium bg-yellow-50">
                           {d}
                         </td>
                       ))}
-                      <td className="p-2 border"></td>
+                      <td className="p-2 border bg-yellow-100"></td>
                     </tr>
                   </tbody>
                 </table>
@@ -136,19 +136,19 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                         <table className="w-full border-collapse">
                           <thead>
                             <tr>
-                              <th className="p-2 border"></th>
+                              <th className="p-2 border bg-green-500"></th>
                               {Array.from({ length: problem.demand.length }).map((_, index) => (
-                                <th key={`step-header-dest-${index}`} className="p-2 border">
+                                <th key={`step-header-dest-${index}`} className="p-2 border bg-green-500">
                                   D{index + 1}
                                 </th>
                               ))}
-                              <th className="p-2 border">Supply</th>
+                              <th className="p-2 border bg-yellow-100">Supply</th>
                             </tr>
                           </thead>
                           <tbody>
                             {Array.from({ length: problem.supply.length }).map((_, sourceIndex) => (
                               <tr key={`step-row-${sourceIndex}`}>
-                                <th className="p-2 border">S{sourceIndex + 1}</th>
+                                <th className="p-2 border bg-green-500">S{sourceIndex + 1}</th>
                                 {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
                                   const isCurrentAllocation =
                                     allocStep.allocation?.source === sourceIndex &&
@@ -171,13 +171,17 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                                   return (
                                     <td
                                       key={`step-cell-${sourceIndex}-${destIndex}`}
-                                      className={`p-2 border text-center ${
-                                        isCurrentAllocation
-                                          ? "bg-blue-600/20"
-                                          : allocation
-                                          ? "bg-blue-600/10"
-                                          : ""
-                                      }`}
+                                      className={`p-2 border text-center
+                                        ${
+                                          isCurrentAllocation
+                                            ? "bg-orange-300"
+                                            : allocation
+                                            ? "bg-orange-100"
+                                            : isCellUnavailable
+                                            ? "bg-gray-100"
+                                            : ""
+                                        }
+                                      `}
                                     >
                                       {allocation ? (
                                         <div>
@@ -198,19 +202,21 @@ export default function SolutionDisplay({ solution, problem, method, viewMode }:
                                     </td>
                                   )
                                 })}
-                                <td className="p-2 border text-center font-medium">
+                                <td className="p-2 border text-center font-medium bg-yellow-50">
                                   {allocStep.remainingSupply?.[sourceIndex] ?? 0}
                                 </td>
                               </tr>
                             ))}
                             <tr>
-                              <th className="p-2 border">Demand</th>
+                              <th className="p-2 border bg-yellow-100">Demand</th>
                               {allocStep.remainingDemand?.map((d, index) => (
-                                <td key={`step-demand-${index}`} className="p-2 border text-center font-medium">
+                                <td key={`step-demand-${index}`} className="p-2 border text-center font-medium bg-yellow-50">
                                   {d}
                                 </td>
                               ))}
-                              <td className="p-2 border"></td>
+                              <td className="p-2 border bg-yellow-100 text-xs text-gray-700 text-center">
+                                S: {allocStep.remainingSupply?.reduce((a, b) => a + (typeof b === "number" ? b : 0), 0)} / D: {allocStep.remainingDemand?.reduce((a, b) => a + (typeof b === "number" ? b : 0), 0)}
+                              </td>
                             </tr>
                           </tbody>
                         </table>
