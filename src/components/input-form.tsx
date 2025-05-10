@@ -266,9 +266,9 @@ export default function InputForm({ onSolve, onReset }: InputFormProps) {
           <table className="w-full border-collapse">
             <thead>
               <tr>
-                <th className="p-2 border"></th>
+                <th className="p-2 border text-center"></th>
                 {Array.from({ length: destinations }).map((_, index) => (
-                  <th key={`header-dest-${index}`} className="p-2 border">
+                  <th key={`header-dest-${index}`} className="p-2 border text-center">
                     D{index + 1}
                   </th>
                 ))}
@@ -277,15 +277,15 @@ export default function InputForm({ onSolve, onReset }: InputFormProps) {
             <tbody>
               {Array.from({ length: sources }).map((_, sourceIndex) => (
                 <tr key={`row-${sourceIndex}`}>
-                  <th className="p-2 border">S{sourceIndex + 1}</th>
+                  <th className="p-2 border text-center">S{sourceIndex + 1}</th>
                   {Array.from({ length: destinations }).map((_, destIndex) => (
-                    <td key={`cell-${sourceIndex}-${destIndex}`} className="p-1 border">
+                    <td key={`cell-${sourceIndex}-${destIndex}`} className="p-1 border text-center">
                       <input
                         type="number"
                         min={0}
                         value={costs[sourceIndex]?.[destIndex] ?? ""}
                         onChange={(e) => handleCostChange(sourceIndex, destIndex, e.target.value)}
-                        className="w-16 h-8 text-center border rounded-md"
+                        className="h-8  border rounded-md"
                       />
                     </td>
                   ))}

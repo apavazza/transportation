@@ -42,7 +42,7 @@ export default function TransportationSolver() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
       <div className="bg-white rounded-lg shadow p-4 border">
         <h2 className="text-xl font-semibold mb-4">Input Data</h2>
         <InputForm onSolve={handleSolve} onReset={handleReset} />
