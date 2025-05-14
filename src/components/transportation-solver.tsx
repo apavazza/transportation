@@ -228,8 +228,8 @@ export default function TransportationSolver() {
   }
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-      <div className="bg-white rounded-lg shadow p-4 border relative">
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 md:gap-10 w-full">
+      <div className="bg-white rounded-lg shadow p-6 border relative">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold">Input Data</h2>
           <button
@@ -257,7 +257,7 @@ export default function TransportationSolver() {
         />
       </div>
 
-      <div className="bg-white rounded-lg shadow p-4 border">
+      <div className="bg-white rounded-lg shadow p-6 border">
         <h2 className="text-xl font-semibold mb-4">Solution</h2>
 
         {solution && problem ? (

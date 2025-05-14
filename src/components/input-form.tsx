@@ -230,7 +230,6 @@ export default function InputForm({
     setTransshipmentIndices(newIndices)
   }
 
-  // Add handler for toggling all transshipment nodes
   const toggleAllTransshipmentNodes = () => {
     if (transshipmentIndices.length > 0) {
       // If any nodes are selected, deselect all
@@ -247,6 +246,20 @@ export default function InputForm({
       setTransshipmentIndices(allIndices)
     }
   }
+
+  // Add effect to automatically set all nodes as transient when using mixed transshipment
+  useEffect(() => {
+    if (useTransshipment && transshipmentType === "mixed") {
+      const allIndices: number[] = []
+      for (let i = 0; i < sources; i++) {
+        allIndices.push(i)
+      }
+      for (let i = 0; i < destinations; i++) {
+        allIndices.push(sources + i)
+      }
+      setTransshipmentIndices(allIndices)
+    }
+  }, [sources, destinations, useTransshipment, transshipmentType])
 
   const handleReset = () => {
     setSources(3)
@@ -279,6 +292,9 @@ export default function InputForm({
   // Update the handleSolve function to handle transshipment problems
   const handleSolve = () => {
     try {
+      // Declare the problem variable at the beginning
+      let problem: TransportationProblem | undefined;
+      
       // Check for empty fields
       if (supply.some((s) => s === "")) {
         setError("All supply values must be filled")
@@ -298,62 +314,59 @@ export default function InputForm({
           return
         }
       } else if (transshipmentType === "mixed") {
-        // Mixed transshipment
-        for (let i = 0; i < sources; i++) {
-          for (let j = 0; j < destinations; j++) {
-            if (costs[i]?.[j] === "") {
-              setError("All cost cells must be filled")
-              return
+        // Mixed transshipment problem
+        try {
+          // For mixed transshipment, make sure all nodes are in transshipmentIndices
+          const allIndices: number[] = []
+          for (let i = 0; i < sources; i++) {
+            allIndices.push(i)
+          }
+          for (let i = 0; i < destinations; i++) {
+            allIndices.push(sources + i)
+          }
+          
+          // Mixed transshipment
+          const totalNodes = sources + destinations
+          
+          // Check that all costs except diagonals are filled
+          for (let i = 0; i < totalNodes; i++) {
+            for (let j = 0; j < totalNodes; j++) {
+              // Skip diagonal elements (which are set to 0)
+              if (i === j) continue
+              
+              // Check if this cell is empty
+              if (!costs[i] || costs[i][j] === "") {
+                setError("All cost cells must be filled")
+                return
+              }
             }
           }
-        }
 
-        // Check if at least one transshipment node is selected
-        if (transshipmentIndices.length === 0) {
-          setError("At least one node must be selected as a transshipment node")
-          return
+          // Convert values to numbers for the solver
+          const numericSupply = supply.map(s => typeof s === "string" ? parseFloat(s) : s);
+          const numericDemand = demand.map(d => typeof d === "string" ? parseFloat(d) : d);
+          const numericCosts = costs.map(row => 
+            row.map(cell => typeof cell === "string" ? parseFloat(cell) : (cell as number))
+          );
+          
+          // Use the library function to create the transshipment problem
+          const transshipmentProblem = convertMixedTransshipment(
+            numericSupply as number[],
+            numericDemand as number[],
+            numericCosts as number[][],
+            allIndices
+          );
+          
+          // Convert to transportation problem
+          problem = convertToTransportation(transshipmentProblem);
+        } catch (err) {
+          console.error("Error in mixed transshipment conversion:", err);
+          setError(`Error in transshipment conversion: ${err instanceof Error ? err.message : String(err)}`);
+          return;
         }
       } else {
-        // Dedicated transshipment
-        // Check supply to destination costs
-        for (let i = 0; i < sources; i++) {
-          for (let j = 0; j < destinations; j++) {
-            if (costs[i]?.[j] === "") {
-              setError("All supply to destination costs must be filled")
-              return
-            }
-          }
-        }
-        
-        // Check supply to transshipment costs
-        for (let i = 0; i < sources; i++) {
-          for (let j = 0; j < transshipmentCount; j++) {
-            if (costs[i]?.[destinations + j] === "") {
-              setError("All supply to transshipment costs must be filled")
-              return
-            }
-          }
-        }
-
-        // Check transshipment to destination costs
-        for (let i = 0; i < transshipmentCount; i++) {
-          for (let j = 0; j < destinations; j++) {
-            if (costs[sources + i]?.[j] === "") {
-              setError("All transshipment to destination costs must be filled")
-              return
-            }
-          }
-        }
-
-        // Check transshipment to transshipment costs (optional)
-        for (let i = 0; i < transshipmentCount; i++) {
-          for (let j = 0; j < transshipmentCount; j++) {
-            if (costs[sources + i]?.[destinations + j] === "") {
-              setError("All transshipment to transshipment costs must be filled")
-              return
-            }
-          }
-        }
+        // Dedicated transshipment problem
+        // Conversion will happen later
       }
 
       // Convert all values to numbers
@@ -390,8 +403,6 @@ export default function InputForm({
         }
       }
 
-      let problem: TransportationProblem
-
       if (!useTransshipment) {
         // Regular transportation problem
         problem = {
@@ -400,16 +411,7 @@ export default function InputForm({
           costs: numericCosts,
         }
       } else if (transshipmentType === "mixed") {
-        // Mixed transshipment problem
-        const transshipmentProblem = convertMixedTransshipment(
-          numericSupply,
-          numericDemand,
-          numericCosts,
-          transshipmentIndices,
-        )
-
-        // Convert to transportation problem
-        problem = convertToTransportation(transshipmentProblem)
+        // Skip this section as we already created the problem above
       } else {
         // Dedicated transshipment problem
         const transshipmentProblem = createTransshipmentProblem(
@@ -423,9 +425,13 @@ export default function InputForm({
         problem = convertToTransportation(transshipmentProblem)
       }
 
-      // Pass the problem to onSolve
-      onSolve(problem, method, useUVOptimization)
-      setError(null)
+      // Pass the problem to onSolve only if it's defined
+      if (problem) {
+        onSolve(problem, method, useUVOptimization)
+        setError(null)
+      } else {
+        setError("Error creating transportation problem")
+      }
     } catch (err) {
       setError("Error solving the problem. Please check your inputs.")
       console.error(err)
@@ -440,6 +446,81 @@ export default function InputForm({
 
   // Determine if we should show the dedicated transshipment UI
   const showDedicatedTransshipmentUI = showTransshipmentUI && transshipmentType === "dedicated"
+
+  // Add a function to reset diagonal elements to zero for mixed transshipment
+  const resetDiagonalToZero = () => {
+    if (useTransshipment && transshipmentType === "mixed") {
+      const totalNodes = sources + destinations;
+      const newCosts = [...costs];
+      
+      // Ensure matrix is properly sized
+      while (newCosts.length < totalNodes) {
+        newCosts.push(Array(totalNodes).fill(""));
+      }
+      
+      for (let i = 0; i < totalNodes; i++) {
+        if (!newCosts[i]) {
+          newCosts[i] = Array(totalNodes).fill("");
+        }
+        
+        // Ensure each row has the right number of columns
+        while (newCosts[i].length < totalNodes) {
+          newCosts[i].push("");
+        }
+        
+        // Set diagonal elements to 0
+        newCosts[i][i] = 0;
+      }
+      
+      setCosts(newCosts);
+    }
+  };
+  
+  // Update effect to reset diagonal elements when dimensions change
+  useEffect(() => {
+    if (useTransshipment && transshipmentType === "mixed") {
+      resetDiagonalToZero();
+    }
+  }, [sources, destinations, useTransshipment, transshipmentType]);
+
+  // Add a helper function to generate links for mixed transshipment
+  const generateLinks = (sources: number, destinations: number, costs: (number | string)[][]) => {
+    const links = [];
+    const totalNodes = sources + destinations;
+    
+    // Create links between all nodes based on cost matrix
+    for (let i = 0; i < totalNodes; i++) {
+      for (let j = 0; j < totalNodes; j++) {
+        // Skip self-loops for non-transshipment indices
+        if (i === j) continue;
+        
+        const cost = typeof costs[i]?.[j] === 'string' 
+          ? parseFloat(costs[i][j] as string) 
+          : (costs[i]?.[j] as number) || 0;
+          
+        if (!isNaN(cost) && cost < 999) {
+          links.push({
+            from: i,
+            to: j,
+            cost: cost,
+            flow: 0
+          });
+        }
+      }
+    }
+    
+    // Add self-loops for transshipment nodes with zero cost
+    for (let i = 0; i < totalNodes; i++) {
+      links.push({
+        from: i,
+        to: i,
+        cost: 0,
+        flow: 0
+      });
+    }
+    
+    return links;
+  };
 
   return (
     <div className="space-y-6">
@@ -480,9 +561,24 @@ export default function InputForm({
           checked={useTransshipment}
           onChange={(e) => setUseTransshipment(e.target.checked)}
           className="h-4 w-4 text-blue-600 rounded border-gray-300"
+          disabled
         />
-        <label htmlFor="use-transshipment" className="ml-2 text-sm font-medium">
+        <label htmlFor="use-transshipment" className="ml-2 text-sm font-medium text-gray-500">
           Enable Transshipment
+        </label>
+      </div>
+
+      {/* UV optimization checkbox - directly under transshipment with no extra margin */}
+      <div className="flex items-center mt-1">
+        <input
+          type="checkbox"
+          id="uv-optimization"
+          checked={useUVOptimization}
+          onChange={(e) => setUseUVOptimization(e.target.checked)}
+          className="h-4 w-4 text-blue-600 rounded border-gray-300"
+        />
+        <label htmlFor="uv-optimization" className="ml-2 text-sm font-medium">
+          UV Optimization (MODI Method)
         </label>
       </div>
 
@@ -546,186 +642,302 @@ export default function InputForm({
       <div>
         <h3 className="text-lg font-medium mb-2">Transportation Problem</h3>
 
-        {/* Mixed transshipment node selection */}
-        {showMixedTransshipmentUI && (
-          <div className="mb-4 border p-3 rounded-md">
-            <div className="flex justify-between items-center mb-2">
-              <h4 className="text-sm font-medium">Mixed Transportation Nodes</h4>
-              <div className="flex space-x-2 border rounded overflow-hidden">
-                <button
-                  onClick={() => {
-                    const newIndices = [...transshipmentIndices];
-                    // Find the next node that isn't already a transshipment node
-                    for (let i = 0; i < sources + destinations; i++) {
-                      if (!transshipmentIndices.includes(i)) {
-                        newIndices.push(i);
-                        break;
-                      }
-                    }
-                    setTransshipmentIndices(newIndices);
-                  }}
-                  className="px-3 py-1 bg-gray-100 hover:bg-gray-200"
-                  title="Add mixed node"
-                  disabled={transshipmentIndices.length >= sources + destinations}
-                >
-                  +
-                </button>
-                <button
-                  onClick={() => {
-                    if (transshipmentIndices.length > 0) {
-                      const newIndices = [...transshipmentIndices];
-                      newIndices.pop();
-                      setTransshipmentIndices(newIndices);
-                    }
-                  }}
-                  className="px-3 py-1 bg-gray-100 hover:bg-gray-200"
-                  title="Remove mixed node"
-                  disabled={transshipmentIndices.length === 0}
-                >
-                  -
-                </button>
-              </div>
-            </div>
-            <div className="text-sm mb-2 text-gray-600">
-              Selected nodes ({transshipmentIndices.length}): 
-              {transshipmentIndices.map((idx, i) => (
-                <span key={`idx-${idx}`} className="ml-1">
-                  {idx < sources ? `S${idx + 1}` : `D${idx - sources + 1}`}
-                  {i < transshipmentIndices.length - 1 ? "," : ""}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="overflow-x-auto">
+        <div className="overflow-auto border rounded">
           {!showDedicatedTransshipmentUI ? (
-            // Regular transportation or mixed transshipment
-            <table className="w-full border-collapse">
-              <thead>
-                <tr>
-                  <th className="p-2 border"></th>
-                  {Array.from({ length: destinations }).map((_, index) => (
-                    <th key={`header-dest-${index}`} className="p-2 border">
-                      D{index + 1}
-                      {showMixedTransshipmentUI && transshipmentIndices.includes(sources + index) && (
-                        <span className="text-xs text-blue-600"> (T)</span>
-                      )}
-                    </th>
-                  ))}
-                  <th className="p-2 border bg-blue-50">Supply</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: sources }).map((_, sourceIndex) => (
-                  <tr key={`row-${sourceIndex}`}>
-                    <th className="p-2 border">
-                      S{sourceIndex + 1}
-                      {showMixedTransshipmentUI && transshipmentIndices.includes(sourceIndex) && (
-                        <span className="text-xs text-blue-600"> (T)</span>
-                      )}
-                    </th>
-                    {Array.from({ length: destinations }).map((_, destIndex) => (
-                      <td key={`cell-${sourceIndex}-${destIndex}`} className="p-1 border">
+            !useTransshipment || transshipmentType !== "mixed" ? (
+              // Regular transportation problem
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="p-3 border"></th>
+                    {Array.from({ length: destinations }).map((_, index) => (
+                      <th key={`header-dest-${index}`} className="p-3 border">
+                        D{index + 1}
+                        {showMixedTransshipmentUI && transshipmentIndices.includes(sources + index) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                    ))}
+                    <th className="p-3 border bg-blue-50">Supply</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Array.from({ length: sources }).map((_, sourceIndex) => (
+                    <tr key={`row-${sourceIndex}`}>
+                      <th className="p-3 border">
+                        S{sourceIndex + 1}
+                        {showMixedTransshipmentUI && transshipmentIndices.includes(sourceIndex) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                      {Array.from({ length: destinations }).map((_, destIndex) => (
+                        <td key={`cell-${sourceIndex}-${destIndex}`} className="p-2 border">
+                          <input
+                            type="number"
+                            min={0}
+                            value={costs[sourceIndex]?.[destIndex] ?? ""}
+                            onChange={(e) => handleCostChange(sourceIndex, destIndex, e.target.value)}
+                            className="w-24 h-8 text-center border rounded-md"
+                            placeholder="Cost"
+                          />
+                        </td>
+                      ))}
+                      <td className="p-2 border bg-blue-50">
                         <input
                           type="number"
-                          min={0}
-                          value={costs[sourceIndex]?.[destIndex] ?? ""}
-                          onChange={(e) => handleCostChange(sourceIndex, destIndex, e.target.value)}
-                          className="w-16 h-8 text-center border rounded-md"
-                          placeholder="Cost"
+                          min={1}
+                          value={supply[sourceIndex] ?? ""}
+                          onChange={(e) => handleSupplyChange(sourceIndex, e.target.value)}
+                          className="w-24 h-8 text-center border rounded-md bg-blue-50"
+                          placeholder="Supply"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <th className="p-3 border bg-blue-50">Demand</th>
+                    {Array.from({ length: destinations }).map((_, index) => (
+                      <td key={`demand-${index}`} className="p-2 border bg-blue-50">
+                        <input
+                          type="number"
+                          min={1}
+                          value={demand[index] ?? ""}
+                          onChange={(e) => handleDemandChange(index, e.target.value)}
+                          className="w-24 h-8 text-center border rounded-md bg-blue-50"
+                          placeholder="Demand"
                         />
                       </td>
                     ))}
-                    <td className="p-1 border bg-blue-50">
-                      <input
-                        type="number"
-                        min={1}
-                        value={supply[sourceIndex] ?? ""}
-                        onChange={(e) => handleSupplyChange(sourceIndex, e.target.value)}
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
-                        placeholder="Supply"
-                      />
-                    </td>
+                    <td className="p-2 border"></td>
                   </tr>
-                ))}
-                <tr>
-                  <th className="p-2 border bg-blue-50">Demand</th>
-                  {Array.from({ length: destinations }).map((_, index) => (
-                    <td key={`demand-${index}`} className="p-1 border bg-blue-50">
-                      <input
-                        type="number"
-                        min={1}
-                        value={demand[index] ?? ""}
-                        onChange={(e) => handleDemandChange(index, e.target.value)}
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
-                        placeholder="Demand"
-                      />
-                    </td>
+                </tbody>
+              </table>
+            ) : (
+              // Mixed transshipment problem - Full matrix layout
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="p-3 border"></th>
+                    {/* Source columns */}
+                    {Array.from({ length: sources }).map((_, index) => (
+                      <th key={`header-source-${index}`} className="p-3 border">
+                        S{index + 1}
+                        {transshipmentIndices.includes(index) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                    ))}
+                    {/* Destination columns */}
+                    {Array.from({ length: destinations }).map((_, index) => (
+                      <th key={`header-dest-${index}`} className="p-3 border">
+                        D{index + 1}
+                        {transshipmentIndices.includes(sources + index) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                    ))}
+                    <th className="p-3 border bg-blue-50">Capacity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* Source rows */}
+                  {Array.from({ length: sources }).map((_, sourceIndex) => (
+                    <tr key={`row-source-${sourceIndex}`}>
+                      <th className="p-3 border">
+                        S{sourceIndex + 1}
+                        {transshipmentIndices.includes(sourceIndex) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                      {/* Source to Source costs */}
+                      {Array.from({ length: sources }).map((_, toSourceIndex) => (
+                        <td key={`cell-s-s-${sourceIndex}-${toSourceIndex}`} className="p-2 border">
+                          {sourceIndex === toSourceIndex ? (
+                            // Diagonal cells - fixed at 0
+                            <input
+                              type="number"
+                              value="0"
+                              readOnly
+                              disabled
+                              className="w-24 h-8 text-center border rounded-md bg-gray-100"
+                            />
+                          ) : (
+                            <input
+                              type="number"
+                              min={0}
+                              value={costs[sourceIndex]?.[toSourceIndex] ?? ""}
+                              onChange={(e) => handleCostChange(sourceIndex, toSourceIndex, e.target.value)}
+                              className="w-24 h-8 text-center border rounded-md"
+                              placeholder="Cost"
+                            />
+                          )}
+                        </td>
+                      ))}
+                      {/* Source to Destination costs */}
+                      {Array.from({ length: destinations }).map((_, destIndex) => (
+                        <td key={`cell-s-d-${sourceIndex}-${destIndex}`} className="p-2 border">
+                          <input
+                            type="number"
+                            min={0}
+                            value={costs[sourceIndex]?.[sources + destIndex] ?? ""}
+                            onChange={(e) => handleCostChange(sourceIndex, sources + destIndex, e.target.value)}
+                            className="w-24 h-8 text-center border rounded-md"
+                            placeholder="Cost"
+                          />
+                        </td>
+                      ))}
+                      {/* Source capacity in the last column */}
+                      <td className="p-2 border bg-blue-50">
+                        <input
+                          type="number"
+                          min={1}
+                          value={supply[sourceIndex] ?? ""}
+                          onChange={(e) => handleSupplyChange(sourceIndex, e.target.value)}
+                          className="w-24 h-8 text-center border rounded-md bg-blue-50"
+                          placeholder="Supply"
+                        />
+                      </td>
+                    </tr>
                   ))}
-                  <td className="p-2 border"></td>
-                </tr>
-              </tbody>
-            </table>
+                  {/* Destination rows */}
+                  {Array.from({ length: destinations }).map((_, destIndex) => (
+                    <tr key={`row-dest-${destIndex}`}>
+                      <th className="p-3 border">
+                        D{destIndex + 1}
+                        {transshipmentIndices.includes(sources + destIndex) && (
+                          <span className="text-xs text-blue-600"> (T)</span>
+                        )}
+                      </th>
+                      {/* Destination to Source costs */}
+                      {Array.from({ length: sources }).map((_, sourceIndex) => (
+                        <td key={`cell-d-s-${destIndex}-${sourceIndex}`} className="p-2 border">
+                          <input
+                            type="number"
+                            min={0}
+                            value={costs[sources + destIndex]?.[sourceIndex] ?? ""}
+                            onChange={(e) => handleCostChange(sources + destIndex, sourceIndex, e.target.value)}
+                            className="w-24 h-8 text-center border rounded-md"
+                            placeholder="Cost"
+                          />
+                        </td>
+                      ))}
+                      {/* Destination to Destination costs */}
+                      {Array.from({ length: destinations }).map((_, toDestIndex) => (
+                        <td key={`cell-d-d-${destIndex}-${toDestIndex}`} className="p-2 border">
+                          {destIndex === toDestIndex ? (
+                            // Diagonal cells - fixed at 0
+                            <input
+                              type="number"
+                              value="0"
+                              readOnly
+                              disabled
+                              className="w-24 h-8 text-center border rounded-md bg-gray-100"
+                            />
+                          ) : (
+                            <input
+                              type="number"
+                              min={0}
+                              value={costs[sources + destIndex]?.[sources + toDestIndex] ?? ""}
+                              onChange={(e) => handleCostChange(sources + destIndex, sources + toDestIndex, e.target.value)}
+                              className="w-24 h-8 text-center border rounded-md"
+                              placeholder="Cost"
+                            />
+                          )}
+                        </td>
+                      ))}
+                      {/* Empty cell in last column for destinations */}
+                      <td className="p-2 border bg-blue-50">
+                        <div className="w-24 h-8 bg-gray-50 rounded-md"></div>
+                      </td>
+                    </tr>
+                  ))}
+                  {/* Bottom row for demand values */}
+                  <tr>
+                    <th className="p-3 border bg-blue-50">Capacity</th>
+                    {/* Empty cells under Source columns */}
+                    {Array.from({ length: sources }).map((_, index) => (
+                      <td key={`cap-source-${index}`} className="p-2 border bg-blue-50">
+                        <div className="w-24 h-8 bg-gray-50 rounded-md"></div>
+                      </td>
+                    ))}
+                    {/* Demand input cells under Destination columns */}
+                    {Array.from({ length: destinations }).map((_, index) => (
+                      <td key={`cap-dest-${index}`} className="p-2 border bg-blue-50">
+                        <input
+                          type="number"
+                          min={1}
+                          value={demand[index] ?? ""}
+                          onChange={(e) => handleDemandChange(index, e.target.value)}
+                          className="w-24 h-8 text-center border rounded-md bg-blue-50"
+                          placeholder="Demand"
+                        />
+                      </td>
+                    ))}
+                    {/* Empty cell in the bottom-right corner */}
+                    <td className="p-2 border"></td>
+                  </tr>
+                </tbody>
+              </table>
+            )
           ) : (
             // Dedicated transshipment as a matrix
             <table className="w-full border-collapse">
               <thead>
                 <tr>
-                  <th className="p-2 border"></th>
+                  <th className="p-3 border"></th>
                   {/* Demand nodes in column headers (now first) */}
                   {Array.from({ length: destinations }).map((_, index) => (
-                    <th key={`header-dest-${index}`} className="p-2 border">
+                    <th key={`header-dest-${index}`} className="p-3 border">
                       D{index + 1}
                     </th>
                   ))}
                   {/* Transshipment nodes in column headers (now after demand) */}
                   {Array.from({ length: transshipmentCount }).map((_, index) => (
-                    <th key={`header-trans-${index}`} className="p-2 border">
+                    <th key={`header-trans-${index}`} className="p-3 border">
                       T{index + 1}
                     </th>
                   ))}
-                  <th className="p-2 border bg-blue-50">Supply</th>
+                  <th className="p-3 border bg-blue-50">Supply</th>
                 </tr>
               </thead>
               <tbody>
                 {/* Supply rows */}
                 {Array.from({ length: sources }).map((_, sourceIndex) => (
                   <tr key={`row-${sourceIndex}`}>
-                    <th className="p-2 border">S{sourceIndex + 1}</th>
+                    <th className="p-3 border">S{sourceIndex + 1}</th>
                     {/* Supply to Demand costs */}
                     {Array.from({ length: destinations }).map((_, destIndex) => (
-                      <td key={`cell-s-d-${sourceIndex}-${destIndex}`} className="p-1 border">
+                      <td key={`cell-s-d-${sourceIndex}-${destIndex}`} className="p-2 border">
                         <input
                           type="number"
                           min={0}
                           value={costs[sourceIndex]?.[destIndex] ?? ""}
                           onChange={(e) => handleCostChange(sourceIndex, destIndex, e.target.value)}
-                          className="w-16 h-8 text-center border rounded-md"
+                          className="w-24 h-8 text-center border rounded-md"
                           placeholder="Cost"
                         />
                       </td>
                     ))}
                     {/* Supply to Transshipment costs */}
                     {Array.from({ length: transshipmentCount }).map((_, transIndex) => (
-                      <td key={`cell-s-t-${sourceIndex}-${transIndex}`} className="p-1 border">
+                      <td key={`cell-s-t-${sourceIndex}-${transIndex}`} className="p-2 border">
                         <input
                           type="number"
                           min={0}
                           value={costs[sourceIndex]?.[destinations + transIndex] ?? ""}
                           onChange={(e) => handleCostChange(sourceIndex, destinations + transIndex, e.target.value)}
-                          className="w-16 h-8 text-center border rounded-md"
+                          className="w-24 h-8 text-center border rounded-md"
                           placeholder="Cost"
                         />
                       </td>
                     ))}
-                    <td className="p-1 border bg-blue-50">
+                    <td className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={1}
                         value={supply[sourceIndex] ?? ""}
                         onChange={(e) => handleSupplyChange(sourceIndex, e.target.value)}
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
+                        className="w-24 h-8 text-center border rounded-md bg-blue-50"
                         placeholder="Supply"
                       />
                     </td>
@@ -734,10 +946,10 @@ export default function InputForm({
                 {/* Transshipment rows */}
                 {Array.from({ length: transshipmentCount }).map((_, transIndex) => (
                   <tr key={`row-trans-${transIndex}`}>
-                    <th className="p-2 border">T{transIndex + 1}</th>
+                    <th className="p-3 border">T{transIndex + 1}</th>
                     {/* Transshipment to Demand costs */}
                     {Array.from({ length: destinations }).map((_, destIndex) => (
-                      <td key={`cell-t-d-${transIndex}-${destIndex}`} className="p-1 border">
+                      <td key={`cell-t-d-${transIndex}-${destIndex}`} className="p-2 border">
                         <input
                           type="number"
                           min={0}
@@ -745,14 +957,14 @@ export default function InputForm({
                           onChange={(e) =>
                             handleCostChange(sources + transIndex, destIndex, e.target.value)
                           }
-                          className="w-16 h-8 text-center border rounded-md"
+                          className="w-24 h-8 text-center border rounded-md"
                           placeholder="Cost"
                         />
                       </td>
                     ))}
                     {/* Transshipment to Transshipment costs */}
                     {Array.from({ length: transshipmentCount }).map((_, toTransIndex) => (
-                      <td key={`cell-t-t-${transIndex}-${toTransIndex}`} className="p-1 border">
+                      <td key={`cell-t-t-${transIndex}-${toTransIndex}`} className="p-2 border">
                         <input
                           type="number"
                           min={0}
@@ -760,18 +972,18 @@ export default function InputForm({
                           onChange={(e) =>
                             handleCostChange(sources + transIndex, destinations + toTransIndex, e.target.value)
                           }
-                          className="w-16 h-8 text-center border rounded-md"
+                          className="w-24 h-8 text-center border rounded-md"
                           placeholder="Cost"
                         />
                       </td>
                     ))}
-                    <td className="p-1 border bg-blue-50">
+                    <td className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={0}
                         value="0"
                         readOnly
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
+                        className="w-24 h-8 text-center border rounded-md bg-blue-50"
                         placeholder="0"
                       />
                     </td>
@@ -779,29 +991,29 @@ export default function InputForm({
                 ))}
                 {/* Demand row */}
                 <tr>
-                  <th className="p-2 border bg-blue-50">Demand</th>
+                  <th className="p-3 border bg-blue-50">Demand</th>
                   {/* Actual demand */}
                   {Array.from({ length: destinations }).map((_, index) => (
-                    <td key={`demand-${index}`} className="p-1 border bg-blue-50">
+                    <td key={`demand-${index}`} className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={1}
                         value={demand[index] ?? ""}
                         onChange={(e) => handleDemandChange(index, e.target.value)}
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
+                        className="w-24 h-8 text-center border rounded-md bg-blue-50"
                         placeholder="Demand"
                       />
                     </td>
                   ))}
                   {/* Transshipment demand (should be zero) */}
                   {Array.from({ length: transshipmentCount }).map((_, index) => (
-                    <td key={`trans-demand-${index}`} className="p-1 border bg-blue-50">
+                    <td key={`trans-demand-${index}`} className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={0}
                         value="0"
                         readOnly
-                        className="w-16 h-8 text-center border rounded-md bg-blue-50"
+                        className="w-24 h-8 text-center border rounded-md bg-blue-50"
                         placeholder="0"
                       />
                     </td>
@@ -812,19 +1024,6 @@ export default function InputForm({
             </table>
           )}
         </div>
-      </div>
-
-      <div className="flex items-center">
-        <input
-          type="checkbox"
-          id="uv-optimization"
-          checked={useUVOptimization}
-          onChange={(e) => setUseUVOptimization(e.target.checked)}
-          className="h-4 w-4 text-blue-600 rounded border-gray-300"
-        />
-        <label htmlFor="uv-optimization" className="ml-2 text-sm font-medium">
-          UV Optimization (MODI Method)
-        </label>
       </div>
 
       {error && <div className="text-red-500 text-sm">{error}</div>}
