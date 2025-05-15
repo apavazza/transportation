@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import Counter from "./counter"
 import { convertMixedTransshipment, createTransshipmentProblem, convertToTransportation } from "@/src/lib/transshipment"
 import type { TransportationProblem, Method } from "@/src/lib/types"
@@ -217,6 +217,7 @@ export default function InputForm({
   }
 
   // Add handler for toggling transshipment nodes
+  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
   const toggleTransshipmentNode = (index: number) => {
     const newIndices = [...transshipmentIndices]
     const position = newIndices.indexOf(index)
@@ -230,6 +231,7 @@ export default function InputForm({
     setTransshipmentIndices(newIndices)
   }
 
+  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
   const toggleAllTransshipmentNodes = () => {
     if (transshipmentIndices.length > 0) {
       // If any nodes are selected, deselect all
@@ -448,42 +450,36 @@ export default function InputForm({
   const showDedicatedTransshipmentUI = showTransshipmentUI && transshipmentType === "dedicated"
 
   // Add a function to reset diagonal elements to zero for mixed transshipment
-  const resetDiagonalToZero = () => {
+  const resetDiagonalToZero = useCallback(() => {
     if (useTransshipment && transshipmentType === "mixed") {
       const totalNodes = sources + destinations;
       const newCosts = [...costs];
-      
-      // Ensure matrix is properly sized
+
       while (newCosts.length < totalNodes) {
         newCosts.push(Array(totalNodes).fill(""));
       }
-      
+
       for (let i = 0; i < totalNodes; i++) {
         if (!newCosts[i]) {
           newCosts[i] = Array(totalNodes).fill("");
         }
-        
-        // Ensure each row has the right number of columns
         while (newCosts[i].length < totalNodes) {
           newCosts[i].push("");
         }
-        
-        // Set diagonal elements to 0
         newCosts[i][i] = 0;
       }
-      
+
       setCosts(newCosts);
     }
-  };
-  
+  }, [useTransshipment, transshipmentType, sources, destinations, costs, setCosts]);
+
   // Update effect to reset diagonal elements when dimensions change
   useEffect(() => {
-    if (useTransshipment && transshipmentType === "mixed") {
-      resetDiagonalToZero();
-    }
-  }, [sources, destinations, useTransshipment, transshipmentType]);
+    resetDiagonalToZero();
+  }, [resetDiagonalToZero]);
 
   // Add a helper function to generate links for mixed transshipment
+  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
   const generateLinks = (sources: number, destinations: number, costs: (number | string)[][]) => {
     const links = [];
     const totalNodes = sources + destinations;

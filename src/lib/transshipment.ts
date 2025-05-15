@@ -331,6 +331,7 @@ export function convertMixedTransshipment(
 
   // Calculate total supply and demand
   const totalSupply = supply.reduce((sum, val) => sum + val, 0);
+  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
   const totalDemand = demand.reduce((sum, val) => sum + val, 0);
   
   // Make a copy of transshipmentIndices so we can modify it

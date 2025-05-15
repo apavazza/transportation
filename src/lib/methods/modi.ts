@@ -24,14 +24,17 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
       const updatedAllocations = handleDegenerateCase(currentSolution.allocations, costs, m, n)
 
       steps.push({
-        type: "uv",
-        description: `Iteration ${iteration}: Adding epsilon allocations to handle degenerate case.`,
-      })
+        type: "allocation",
+        description: "Degenerate fix: ε allocated",
+        remainingSupply: [...problem.supply],
+        remainingDemand: [...problem.demand],
+        allAllocations: updatedAllocations,
+      });
 
       currentSolution = {
         ...currentSolution,
         allocations: updatedAllocations,
-        totalCost: calculateTotalCost(updatedAllocations, costs)
+        totalCost: calculateTotalCost(updatedAllocations, costs),
       }
 
       iteration++
@@ -53,7 +56,7 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
     const opportunityCosts = calculateOpportunityCosts(uValues, vValues, costs)
 
     // Step 4: Find the entering variable (cell with most NEGATIVE opportunity cost)
-    const enteringCell = findEnteringCell(opportunityCosts, currentSolution.allocations)
+    let enteringCell = findEnteringCell(opportunityCosts, currentSolution.allocations)
 
     // If no negative opportunity costs, solution is optimal
     if (!enteringCell) {
@@ -69,38 +72,44 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
     }
 
     // Step 5: Find the cycle (closed loop)
-    const cycle = findCycle(enteringCell, currentSolution.allocations, supply.length, demand.length)
-    
-    // If cycle is invalid (less than 4 cells), skip this iteration
-    if (cycle.length < 4) {
+    let cycle = findCycle(enteringCell, currentSolution.allocations, supply.length, demand.length)
+
+    // If cycle is invalid (less than 4 cells), we can't improve this solution path
+    if (!cycle || cycle.length < 4) {
       steps.push({
         type: "uv",
         description: `Iteration ${iteration}: Could not find a valid cycle for entering cell (S${enteringCell.source + 1},D${
           enteringCell.destination + 1
-        }). Skipping.`,
+        }). Trying next best entering cell.`,
         uValues,
         vValues,
         opportunityCosts,
         enteringCell
       });
       
-      // Try forcing a valid cycle by adding an epsilon allocation at the entering cell
-      const forcedAllocations = [...currentSolution.allocations];
-      const epsilon = 0.000001;
-      forcedAllocations.push({
-        source: enteringCell.source,
-        destination: enteringCell.destination,
-        value: epsilon
-      });
+      const nextBestEnteringCell = findNextBestEnteringCell(
+        opportunityCosts, 
+        currentSolution.allocations,
+        enteringCell // exclude this cell from consideration
+      );
       
-      currentSolution = {
-        ...currentSolution,
-        allocations: forcedAllocations,
-        totalCost: calculateTotalCost(forcedAllocations, costs)
-      };
-      
-      iteration++;
-      continue;
+      if (nextBestEnteringCell) {
+        // Try with next best entering cell
+        const nextCycle = findCycle(nextBestEnteringCell, currentSolution.allocations, supply.length, demand.length);
+        if (nextCycle && nextCycle.length >= 4) {
+          // Found a valid cycle with the next best cell
+          enteringCell = nextBestEnteringCell;
+          cycle = nextCycle;
+        } else {
+          // If still no valid cycle, this solution might be optimal or degenerate
+          isOptimal = true;
+          break;
+        }
+      } else {
+        // No more negative opportunity costs to try
+        isOptimal = true;
+        break;
+      }
     }
 
     // Step 6: Find the leaving variable (smallest allocation among cells with "-" sign)
@@ -562,189 +571,173 @@ function findEnteringCell(
   return { source: minSource, destination: minDest };
 }
 
-function findCycle(enteringCell: Cell, allocations: Allocation[], numSources: number, numDestinations: number): Cell[] {
-  // Create a grid to track basic cells (cells with allocations)
+function findCycle(
+  enteringCell: Cell,
+  allocations: Allocation[],
+  numSources: number,
+  numDestinations: number
+): Cell[] {
+  // Mark all allocated cells in a grid
   const basicCellGrid: boolean[][] = Array(numSources)
     .fill(null)
-    .map(() => Array(numDestinations).fill(false))
+    .map(() => Array(numDestinations).fill(false));
 
   for (const allocation of allocations) {
-    basicCellGrid[allocation.source][allocation.destination] = true
+    basicCellGrid[allocation.source][allocation.destination] = true;
   }
 
-  // Using Steppable Cycle method to find a cycle
-  return findSteppableCycle(enteringCell, basicCellGrid, numSources, numDestinations, allocations);
-}
+  // IMPORTANT: Force the entering cell to be treated as allocated for cycle search
+  basicCellGrid[enteringCell.source][enteringCell.destination] = true;
 
-function findSteppableCycle(
-  enteringCell: Cell, 
-  basicCellGrid: boolean[][], 
-  numSources: number, 
-  numDestinations: number,
-  allocations: Allocation[]
-): Cell[] {
-  // Step 1: Try to form a simple rectangular cycle first (most common and reliable)
-  const simpleCycle = tryRectangularCycle(enteringCell, basicCellGrid, allocations);
-  if (simpleCycle.length >= 4) {
-    return simpleCycle;
+  // Build a bipartite graph (rows and columns as nodes)
+  const rowNodes = new Map<number, Set<number>>();
+  const colNodes = new Map<number, Set<number>>();
+
+  for (let i = 0; i < numSources; i++) {
+    rowNodes.set(i, new Set<number>());
   }
-  
-  // Step 2: If rectangular cycle failed, try the recursive approach
-  const cycle: Cell[] = [enteringCell];
+  for (let j = 0; j < numDestinations; j++) {
+    colNodes.set(j, new Set<number>());
+  }
+
+  // Each basic cell links row i to column j
+  for (let i = 0; i < numSources; i++) {
+    for (let j = 0; j < numDestinations; j++) {
+      if (basicCellGrid[i][j]) {
+        rowNodes.get(i)?.add(j);
+        colNodes.get(j)?.add(i);
+      }
+    }
+  }
+
+  // Find all cycles that start and end at row(enteringCell.source),
+  // but also must include col(enteringCell.destination)
+  const cycles: string[][] = [];
+  const path: string[] = [`r${enteringCell.source}`];
   const visited = new Set<string>();
-  
-  if (findCycleRecursive(
-    enteringCell,
-    enteringCell,
-    basicCellGrid,
-    cycle,
-    "none",
+
+  // DFS to find cycles in this bipartite graph
+  findBipartiteCycles(
+    rowNodes,
+    colNodes,
+    `r${enteringCell.source}`,  // start
+    `r${enteringCell.source}`,  // current
     visited,
-    allocations
-  )) {
-    return cycle;
+    path,
+    cycles,
+    0,
+    20
+  );
+
+  // Filter out any cycles that don’t include the column node
+  const validCycles = cycles.filter((cycle) => cycle.includes(`c${enteringCell.destination}`));
+
+  if (validCycles.length === 0) {
+    // No cycle found
+    return [];
   }
-  
-  // Step 3: If all methods fail, use any known working cycle pattern
-  // We'll try adding the entering cell to existing allocations to see if we can form a cycle
-  return tryFallbackCycle(enteringCell, basicCellGrid, allocations);
+
+  // Convert the first valid cycle into a list of Cell objects
+  const graphCycle = validCycles[0];
+  let cellCycle = convertGraphCycleToCellCycle(graphCycle);
+
+  const idx = cellCycle.findIndex(
+    (c) =>
+      c.source === enteringCell.source &&
+      c.destination === enteringCell.destination
+  );
+  if (idx > 0) {
+    // Rotate array so entering cell is first
+    cellCycle = [
+      ...cellCycle.slice(idx),
+      ...cellCycle.slice(0, idx),
+    ];
+  }
+
+  // Must have at least 4 cells to be a valid loop
+  return cellCycle.length >= 4 ? cellCycle : [];
 }
 
-function tryRectangularCycle(enteringCell: Cell, basicCellGrid: boolean[][], allocations: Allocation[]): Cell[] {
-  const rowBasicCells: Cell[] = allocations
-    .filter(a => a.source === enteringCell.source)
-    .map(a => ({ source: a.source, destination: a.destination }));
-    
-  const colBasicCells: Cell[] = allocations
-    .filter(a => a.destination === enteringCell.destination)
-    .map(a => ({ source: a.source, destination: a.destination }));
-  
-  // Try each combination of row cell and column cell to form a rectangle
-  for (const rowCell of rowBasicCells) {
-    for (const colCell of colBasicCells) {
-      // Check if the opposite corner is a basic cell
-      const cornerCoord = { source: colCell.source, destination: rowCell.destination };
-      if (basicCellGrid[cornerCoord.source][cornerCoord.destination]) {
-        // We found a rectangular cycle
-        return [
-          enteringCell,
-          { source: enteringCell.source, destination: rowCell.destination },
-          { source: colCell.source, destination: rowCell.destination },
-          { source: colCell.source, destination: enteringCell.destination }
-        ];
-      }
-    }
-  }
-  
-  return []; // No valid rectangular cycle found
-}
-
-function tryFallbackCycle(
-  enteringCell: Cell, 
-  basicCellGrid: boolean[][], 
-  allocations: Allocation[],
-): Cell[] {
-  // Find the closest basic cells in the same row and column
-  const sameRowBasicCells = allocations
-    .filter(a => a.source === enteringCell.source)
-    .map(a => ({ source: a.source, destination: a.destination }));
-    
-  const sameColBasicCells = allocations
-    .filter(a => a.destination === enteringCell.destination)
-    .map(a => ({ source: a.source, destination: a.destination }));
-  
-  if (sameRowBasicCells.length === 0 || sameColBasicCells.length === 0) {
-    // Cannot form a cycle without cells in both row and column
-    return [enteringCell];
-  }
-  
-  // Just return a simple path (not a true cycle, but it's a fallback)
-  // This is a last resort and might not give optimal results,
-  // but should prevent the algorithm from breaking
-  const rowCell = sameRowBasicCells[0];
-  const colCell = sameColBasicCells[0];
-  
-  return [
-    enteringCell,
-    rowCell,
-    colCell
-  ];
-}
-
-function findCycleRecursive(
-  start: Cell,
-  current: Cell,
-  basicCellGrid: boolean[][],
-  cycle: Cell[],
-  lastDirection: "horizontal" | "vertical" | "none",
+/**
+ * DFS for cycles in a bipartite graph of rowNodes -> colNodes.
+ */
+function findBipartiteCycles(
+  rowNodes: Map<number, Set<number>>,
+  colNodes: Map<number, Set<number>>,
+  start: string,
+  current: string,
   visited: Set<string>,
-  allocations: Allocation[],
-): boolean {
-  // Mark current cell as visited
-  const cellKey = `${current.source},${current.destination}`
-  visited.add(cellKey)
+  path: string[],
+  cycles: string[][],
+  depth: number,
+  maxDepth: number
+): void {
+  if (depth > maxDepth) return;
 
-  // If we've returned to the start and have at least 4 cells in the cycle, we've found a valid cycle
-  if (
-    cycle.length > 1 &&
-    current.source === start.source &&
-    current.destination === start.destination &&
-    cycle.length >= 4
-  ) {
-    return true
-  }
+  visited.add(current);
 
-  // Try moving horizontally if last move wasn't horizontal
-  if (lastDirection !== "horizontal") {
-    // Try all cells in the same row
-    for (let j = 0; j < basicCellGrid[0].length; j++) {
-      if (j === current.destination) continue // Skip current cell
+  // Distinguish between rX and cY
+  const isRow = current.startsWith("r");
+  const index = parseInt(current.slice(1), 10);
 
-      const nextCell = { source: current.source, destination: j }
-      const nextCellKey = `${nextCell.source},${nextCell.destination}`
+  // Determine neighbors
+  const neighbors = isRow
+    ? (rowNodes.get(index) || [])
+    : (colNodes.get(index) || []);
 
-      // Only consider basic cells (except for the entering cell)
-      const isBasicOrStart =
-        basicCellGrid[nextCell.source][nextCell.destination] ||
-        (nextCell.source === start.source && nextCell.destination === start.destination && cycle.length > 2)
+  for (const neighbor of neighbors) {
+    const neighborNode = isRow ? `c${neighbor}` : `r${neighbor}`;
 
-      if (isBasicOrStart && !visited.has(nextCellKey)) {
-        cycle.push(nextCell)
-        if (findCycleRecursive(start, nextCell, basicCellGrid, cycle, "horizontal", visited, allocations)) {
-          return true
-        }
-        cycle.pop()
-      }
+    // If we’re back to the start (and valid cycle length)
+    if (neighborNode === start && path.length >= 4) {
+      cycles.push([...path, neighborNode]);
+      continue;
+    }
+
+    // Avoid re-visiting nodes (except to close a cycle)
+    if (!visited.has(neighborNode)) {
+      path.push(neighborNode);
+      findBipartiteCycles(
+        rowNodes,
+        colNodes,
+        start,
+        neighborNode,
+        new Set(visited),
+        path,
+        cycles,
+        depth + 1,
+        maxDepth
+      );
+      path.pop();
     }
   }
+}
 
-  // Try moving vertically if last move wasn't vertical
-  if (lastDirection !== "vertical") {
-    // Try all cells in the same column
-    for (let i = 0; i < basicCellGrid.length; i++) {
-      if (i === current.source) continue // Skip current cell
-
-      const nextCell = { source: i, destination: current.destination }
-      const nextCellKey = `${nextCell.source},${nextCell.destination}`
-
-      // Only consider basic cells (except for the entering cell)
-      const isBasicOrStart =
-        basicCellGrid[nextCell.source][nextCell.destination] ||
-        (nextCell.source === start.source && nextCell.destination === start.destination && cycle.length > 2)
-
-      if (isBasicOrStart && !visited.has(nextCellKey)) {
-        cycle.push(nextCell)
-        if (findCycleRecursive(start, nextCell, basicCellGrid, cycle, "vertical", visited, allocations)) {
-          return true
-        }
-        cycle.pop()
-      }
-    }
+/**
+ * Convert a bipartite cycle (like [r0, c3, r2, c1, r0]) into an array of Cells.
+ */
+function convertGraphCycleToCellCycle(graphCycle: string[]): Cell[] {
+  // Ensure it’s a closed loop
+  if (graphCycle[0] !== graphCycle[graphCycle.length - 1]) {
+    graphCycle.push(graphCycle[0]);
   }
 
-  // Remove current cell from visited if backtracking
-  visited.delete(cellKey)
-  return false
+  const cells: Cell[] = [];
+  // Parse pairs of row->col
+  for (let i = 0; i < graphCycle.length - 1; i++) {
+    const curr = graphCycle[i];
+    const next = graphCycle[i + 1];
+    if (curr.startsWith("r") && next.startsWith("c")) {
+      const source = parseInt(curr.substring(1), 10);
+      const destination = parseInt(next.substring(1), 10);
+      cells.push({ source, destination });
+    } else if (curr.startsWith("c") && next.startsWith("r")) {
+      const source = parseInt(next.substring(1), 10);
+      const destination = parseInt(curr.substring(1), 10);
+      cells.push({ source, destination });
+    }
+  }
+  return cells;
 }
 
 function findLeavingVariable(cycle: Cell[], allocations: Allocation[]): number {
@@ -764,4 +757,32 @@ function findLeavingVariable(cycle: Cell[], allocations: Allocation[]): number {
 
   // If no minimum found (shouldn't happen in a valid problem), return a small value
   return minAllocation === Number.POSITIVE_INFINITY ? 0.000001 : minAllocation
+}
+
+function findNextBestEnteringCell(
+  opportunityCosts: number[][],
+  allocations: Allocation[],
+  excludeCell: Cell
+): Cell | null {
+  let minCost = -0.0000001;
+  let minSource = -1;
+  let minDest = -1;
+
+  for (let i = 0; i < opportunityCosts.length; i++) {
+    for (let j = 0; j < opportunityCosts[i].length; j++) {
+      // Skip the excluded cell and already allocated cells
+      if ((i === excludeCell.source && j === excludeCell.destination) || 
+          allocations.some(a => a.source === i && a.destination === j)) {
+        continue;
+      }
+
+      if (opportunityCosts[i][j] < minCost) {
+        minCost = opportunityCosts[i][j];
+        minSource = i;
+        minDest = j;
+      }
+    }
+  }
+
+  return minSource !== -1 ? { source: minSource, destination: minDest } : null;
 }

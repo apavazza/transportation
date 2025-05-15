@@ -39,6 +39,7 @@ export interface AllocationStep {
   allocation?: Allocation
   remainingSupply?: number[]
   remainingDemand?: number[]
+  allAllocations?: Allocation[]
 }
 
 export interface UVStep {

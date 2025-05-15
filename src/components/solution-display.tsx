@@ -113,9 +113,15 @@ export default function SolutionDisplay({
 
   // Function to format numbers to avoid displaying infinity
   const formatNumber = (num: number): string => {
-    if (!isFinite(num)) return "0"
-    if (Math.abs(num) < 0.001) return "0"
-    return num.toFixed(2)
+    if (!isFinite(num)) return "0";
+
+    // Display epsilon if ≤ 1e-6
+    if (Math.abs(num) <= 1e-6 && num !== 0) {
+      return "ε";
+    }
+
+    if (Math.abs(num) < 0.001) return "0";
+    return num.toFixed(2);
   }
 
   // Function to determine if a cell is a dummy cell
@@ -334,43 +340,22 @@ export default function SolutionDisplay({
                                 {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
                               </th>
                               {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
-                                const isCurrentAllocation =
-                                  step.type === "allocation" &&
-                                  "allocation" in step &&
-                                  step.allocation?.source === sourceIndex && 
-                                  step.allocation?.destination === destIndex
+                                const relevantAllocations = step.allAllocations 
+                                  ? step.allAllocations 
+                                  : initialSteps
+                                      .slice(0, stepIndex + 1)
+                                      .filter((s) => s.type === "allocation" && "allocation" in s && s.allocation)
+                                      .map((s) => (s as AllocationStep).allocation!);
 
-                                const previousAllocations = initialSteps
-                                  .slice(0, stepIndex + 1)
-                                  .filter((s) => s.type === "allocation" && "allocation" in s && s.allocation)
-                                  .map((s) => (s as AllocationStep).allocation!)
-
-                                const allocation = previousAllocations.find(
-                                  (a) => a.source === sourceIndex && a.destination === destIndex,
-                                )
-
-                                const isCellUnavailable =
-                                  step.type === "allocation" &&
-                                  "remainingSupply" in step &&
-                                  "remainingDemand" in step &&
-                                  ((step.remainingSupply?.[sourceIndex] ?? 0) <= 0 || 
-                                   (step.remainingDemand?.[destIndex] ?? 0) <= 0)
-
-                                const isDummy = isDummyCell(sourceIndex, destIndex)
+                                const allocation = relevantAllocations.find(
+                                  (a) => a.source === sourceIndex && a.destination === destIndex
+                                );
 
                                 return (
                                   <td
                                     key={`step-cell-${sourceIndex}-${destIndex}`}
                                     className={`p-2 border text-center ${
-                                      isDummy
-                                        ? "bg-gray-100"
-                                        : isCurrentAllocation
-                                          ? "bg-yellow-300"
-                                          : allocation
-                                            ? "bg-blue-600/10"
-                                            : isCellUnavailable
-                                              ? "bg-gray-200"
-                                              : ""
+                                      allocation ? "bg-blue-600/10" : ""
                                     }`}
                                   >
                                     {allocation ? (
@@ -381,11 +366,7 @@ export default function SolutionDisplay({
                                         </div>
                                       </div>
                                     ) : (
-                                      <div
-                                        className={`text-xs ${
-                                          isCellUnavailable ? "line-through text-gray-400" : "text-gray-500"
-                                        }`}
-                                      >
+                                      <div className="text-xs text-gray-500">
                                         Cost: {problem.costs[sourceIndex][destIndex]}
                                       </div>
                                     )}
@@ -393,7 +374,7 @@ export default function SolutionDisplay({
                                 )
                               })}
                               <td className="p-2 border text-center font-medium">
-                                {formatNumber(step.remainingSupply?.[sourceIndex] ?? problem.supply[sourceIndex])}
+                                {problem.supply[sourceIndex]}
                               </td>
                             </tr>
                           ))}
@@ -552,7 +533,16 @@ export default function SolutionDisplay({
                                             </div>
                                           ) : (
                                             <div>
-                                              {isEnteringCell && <div className="font-bold text-green-600">(+)</div>}
+                                              {/* Show sign for empty cells that are part of the cycle */}
+                                              {(isEnteringCell || isCycleCell) && (
+                                                <div
+                                                  className={`font-bold ${
+                                                    isCycleCell && cycleSign < 0 ? "text-red-600" : "text-green-600"
+                                                  }`}
+                                                >
+                                                  {isCycleCell && cycleSign < 0 ? "(-)" : "(+)"}
+                                                </div>
+                                              )}
                                               <div className="text-xs text-gray-500">
                                                 Cost: {problem.costs[sourceIndex][destIndex]}
                                               </div>
@@ -580,71 +570,6 @@ export default function SolutionDisplay({
                                 </tr>
                               </tbody>
                             </table>
-
-                            {/* Cycle arrows visualization */}
-                            {step.type === "uv" && 
-                             step.cycle && 
-                             step.cycle.length > 3 && (
-                              <svg
-                                className="absolute top-0 left-0 w-full h-full pointer-events-none"
-                                style={{ zIndex: 10 }}
-                              >
-                                {step.cycle.map((cell, idx) => {
-                                  // Connect cells with 90-degree angles (horizontal then vertical)
-                                  const nextCell = step.cycle![(idx + 1) % step.cycle!.length]
-
-                                  // Get cell positions (bottom-left corner of table cells)
-                                  const headerOffset = 40
-                                  const cellWidth = 80
-                                  const cellHeight = 70
-
-                                  // Calculate bottom-left corners instead of centers
-                                  const x1 = headerOffset + cell.destination * cellWidth
-                                  const y1 = headerOffset + (cell.source + 1) * cellHeight
-
-                                  const x2 = headerOffset + nextCell.destination * cellWidth
-                                  const y2 = headerOffset + (nextCell.source + 1) * cellHeight
-
-                                  // Create a path with 90-degree angles
-                                  // For a proper cycle, we should alternate horizontal and vertical movements
-                                  const goHorizontalFirst = idx % 2 === 0
-
-                                  // Calculate the intermediate point for the 90-degree turn
-                                  const xMid = goHorizontalFirst ? x2 : x1
-                                  const yMid = goHorizontalFirst ? y1 : y2
-
-                                  // For arrow head on the second segment
-                                  const isHorizontalSegment2 = goHorizontalFirst ? false : true
-                                  const arrowLength = 10
-                                  const arrowAngle = 30
-
-                                  // Calculate angle for the arrow head based on direction
-                                  // When going from intermediate point to destination
-                                  const angle2 = isHorizontalSegment2
-                                    ? (x2 > xMid ? 0 : 180)  // horizontal: 0 if going right, 180 if going left
-                                    : (y2 > yMid ? 90 : 270) // vertical: 90 if going down, 270 if going up
-
-                                  // Calculate arrow head points to point in the correct direction
-                                  const x2a = x2 - arrowLength * Math.cos(((angle2 - arrowAngle) * Math.PI) / 180)
-                                  const y2a = y2 - arrowLength * Math.sin(((angle2 - arrowAngle) * Math.PI) / 180)
-                                  const x2b = x2 - arrowLength * Math.cos(((angle2 + arrowAngle) * Math.PI) / 180)
-                                  const y2b = y2 - arrowLength * Math.sin(((angle2 + arrowAngle) * Math.PI) / 180)
-
-                                  return (
-                                    <g key={`arrow-${idx}`}>
-                                      {/* First segment */}
-                                      <line x1={x1} y1={y1} x2={xMid} y2={yMid} stroke="#FF4500" strokeWidth="3" />
-
-                                      {/* Second segment with arrow head */}
-                                      <line x1={xMid} y1={yMid} x2={x2} y2={y2} stroke="#FF4500" strokeWidth="3" />
-
-                                      {/* Arrow head */}
-                                      <polygon points={`${x2},${y2} ${x2a},${y2a} ${x2b},${y2b}`} fill="#FF4500" />
-                                    </g>
-                                  )
-                                })}
-                              </svg>
-                            )}
                           </div>
 
                           {step.uValues && step.vValues && (
@@ -763,6 +688,88 @@ export default function SolutionDisplay({
                           )}
                         </div>
                       )}
+
+                      {/* If this is an allocation step, show the same allocation table used in the initial steps */}
+                      {step.type === "allocation" && step.remainingSupply && step.remainingDemand && (
+                        <div className="overflow-x-auto mt-2">
+                          <table className="w-full border-collapse">
+                            <thead>
+                              <tr>
+                                <th className="p-2 border"></th>
+                                {Array.from({ length: problem.demand.length }).map((_, index) => (
+                                  <th
+                                    key={`step-header-dest-${index}`}
+                                    className={`p-2 border ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                  >
+                                    D{index + 1}
+                                    {isDummyCell(0, index) && <span className="text-xs text-gray-500"> (Dummy)</span>}
+                                  </th>
+                                ))}
+                                <th className="p-2 border">Supply</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Array.from({ length: problem.supply.length }).map((_, sourceIndex) => (
+                                <tr key={`step-row-${sourceIndex}`}>
+                                  <th className={`p-2 border ${isDummyCell(sourceIndex, 0) ? "bg-gray-100" : ""}`}>
+                                    S{sourceIndex + 1}
+                                    {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
+                                  </th>
+                                  {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
+                                    const relevantAllocations = step.allAllocations 
+                                      ? step.allAllocations 
+                                      : initialSteps
+                                          .slice(0, stepIndex + 1)
+                                          .filter((s) => s.type === "allocation" && "allocation" in s && s.allocation)
+                                          .map((s) => (s as AllocationStep).allocation!);
+
+                                    const allocation = relevantAllocations.find(
+                                      (a) => a.source === sourceIndex && a.destination === destIndex
+                                    );
+
+                                    return (
+                                      <td
+                                        key={`step-cell-${sourceIndex}-${destIndex}`}
+                                        className={`p-2 border text-center ${
+                                          allocation ? "bg-blue-600/10" : ""
+                                        }`}
+                                      >
+                                        {allocation ? (
+                                          <div>
+                                            <div className="font-bold">{formatNumber(allocation.value)}</div>
+                                            <div className="text-xs text-gray-500">
+                                              Cost: {problem.costs[sourceIndex][destIndex]}
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="text-xs text-gray-500">
+                                            Cost: {problem.costs[sourceIndex][destIndex]}
+                                          </div>
+                                        )}
+                                      </td>
+                                    )
+                                  })}
+                                  <td className="p-2 border text-center font-medium">
+                                    {formatNumber(step.remainingSupply?.[sourceIndex] ?? problem.supply[sourceIndex])}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr>
+                                <th className="p-2 border">Demand</th>
+                                {(step.remainingDemand ?? problem.demand).map((d, index) => (
+                                  <td
+                                    key={`step-demand-${index}`}
+                                    className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                  >
+                                    {formatNumber(d)}
+                                  </td>
+                                ))}
+                                <td className="p-2 border"></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -805,15 +812,6 @@ export default function SolutionDisplay({
                   <li className="flex items-center">
                     <span className="w-4 h-4 bg-gray-200 inline-block mr-2"></span>
                     <span>Unavailable cell (crossed out)</span>
-                  </li>
-                  <li className="flex items-center">
-                    <span className="inline-block mr-2" style={{ color: "#FF4500" }}>
-                      ➡
-                    </span>
-                    <span>
-                      Orange arrows show the cycle path with strictly 90-degree movements (only shown for complete
-                      cycles)
-                    </span>
                   </li>
                   <li className="flex items-center">
                     <span className="inline-block mr-2 text-green-600 font-bold">+</span>
