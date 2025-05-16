@@ -340,6 +340,11 @@ export default function SolutionDisplay({
                                      (step as AllocationStep).pivotCell?.destination === destIndex) ||
                                     (inferredPivotCell?.source === sourceIndex && 
                                      inferredPivotCell?.destination === destIndex);
+                                  
+                                  // Check if the cell cannot be filled (source depleted or destination satisfied)
+                                  const sourceExhausted = step.remainingSupply?.[sourceIndex] === 0;
+                                  const destinationSatisfied = step.remainingDemand?.[destIndex] === 0;
+                                  const cannotBeFilled = sourceExhausted || destinationSatisfied;
 
                                   return (
                                     <td
@@ -349,7 +354,9 @@ export default function SolutionDisplay({
                                           ? "bg-yellow-300 border-yellow-600 border-2"
                                           : allocation
                                             ? "bg-blue-600/10"
-                                            : ""
+                                            : cannotBeFilled
+                                              ? "bg-gray-200"  // Gray out unavailable cells
+                                              : ""
                                       }`}
                                     >
                                       {allocation ? (
