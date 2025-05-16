@@ -76,10 +76,12 @@ export function calculatePenalties(
 
     let min1 = Number.POSITIVE_INFINITY
     let min2 = Number.POSITIVE_INFINITY
+    let availableCellCount = 0
 
     for (let j = 0; j < remainingDemand.length; j++) {
       if (remainingDemand[j] <= 0) continue
-
+      
+      availableCellCount++
       if (costs[i][j] < min1) {
         min2 = min1
         min1 = costs[i][j]
@@ -88,7 +90,18 @@ export function calculatePenalties(
       }
     }
 
-    rowPenalties.push(min2 === Number.POSITIVE_INFINITY ? 0 : min2 - min1)
+    if (availableCellCount === 0) {
+      rowPenalties.push(0)
+    } else if (availableCellCount === 1) {
+      // If only one cell is available, its cost is the penalty.
+      // min1 will hold this cost. min2 will be POSITIVE_INFINITY.
+      rowPenalties.push(min1)
+    } else {
+      // For 2 or more available cells, penalty is the absolute difference
+      // between the two smallest costs. min1 and min2 hold these.
+      // If all available costs are the same, min1 and min2 will be equal, resulting in a 0 penalty.
+      rowPenalties.push(Math.abs(min2 - min1))
+    }
   }
 
   // Calculate column penalties
@@ -100,10 +113,12 @@ export function calculatePenalties(
 
     let min1 = Number.POSITIVE_INFINITY
     let min2 = Number.POSITIVE_INFINITY
+    let availableCellCount = 0
 
     for (let i = 0; i < remainingSupply.length; i++) {
       if (remainingSupply[i] <= 0) continue
-
+      
+      availableCellCount++
       if (costs[i][j] < min1) {
         min2 = min1
         min1 = costs[i][j]
@@ -112,7 +127,15 @@ export function calculatePenalties(
       }
     }
 
-    columnPenalties.push(min2 === Number.POSITIVE_INFINITY ? 0 : min2 - min1)
+    if (availableCellCount === 0) {
+      columnPenalties.push(0)
+    } else if (availableCellCount === 1) {
+      // If only one cell is available, its cost is the penalty.
+      columnPenalties.push(min1)
+    } else {
+      // For 2 or more available cells, penalty is the absolute difference.
+      columnPenalties.push(Math.abs(min2 - min1))
+    }
   }
 
   return { rowPenalties, columnPenalties }

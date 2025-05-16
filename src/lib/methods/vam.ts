@@ -79,6 +79,7 @@ export function solveVAM(problem: TransportationProblem): Solution {
       type: "allocation",
       description: `Allocate ${allocationValue.toFixed(2)} units from Source ${source + 1} to Destination ${destination + 1} (cost: ${costs[source][destination]})`,
       allocation: { ...allocationObj },
+      pivotCell: { source, destination },
       remainingSupply: [...remainingSupply],
       remainingDemand: [...remainingDemand],
       allAllocations: cumulativeAllocationsForSteps.map((a) => ({ ...a })), // All allocations up to this step

@@ -41,6 +41,7 @@ export interface AllocationStep {
   remainingDemand?: number[]
   allAllocations?: Allocation[]
   epsilonGrid?: boolean[][]
+  pivotCell?: { source: number; destination: number }
 }
 
 export interface UVStep {
