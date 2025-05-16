@@ -67,6 +67,41 @@ export default function SolutionDisplay({
     return false
   }
 
+  const findPivotCellForStep = (step: AllocationStep, prevStep?: AllocationStep): { source: number; destination: number } | undefined => {
+    // If the step already has a pivot cell defined, use it
+    if (step.pivotCell) {
+      return step.pivotCell;
+    }
+
+    // If there's no previous step (i.e., first step), the allocation in this step is the pivot
+    if (!prevStep || !prevStep.allAllocations || prevStep.allAllocations.length === 0) {
+      // For first step, if there's only one allocation, it's definitely the pivot
+      if (step.allAllocations && step.allAllocations.length === 1) {
+        return {
+          source: step.allAllocations[0].source,
+          destination: step.allAllocations[0].destination
+        };
+      }
+      return undefined; // Can't determine pivot for first step with multiple allocations
+    }
+
+    // Find the new allocation in current step that isn't in the previous step
+    const newAllocation = step.allAllocations?.find(curr => 
+      !prevStep.allAllocations?.some(prev => 
+        prev.source === curr.source && prev.destination === curr.destination
+      )
+    );
+
+    if (newAllocation) {
+      return {
+        source: newAllocation.source,
+        destination: newAllocation.destination
+      };
+    }
+
+    return undefined;
+  };
+
   // Function to render an allocation table
   const renderAllocationTable = (
     allocations: Allocation[],
@@ -250,135 +285,156 @@ export default function SolutionDisplay({
           {/* Initial solution steps */}
           <div className="mb-6">
             <h4 className="font-medium text-lg mb-4 pb-2 border-b">Initial Solution Steps</h4>
-            {initialSteps.map((step, stepIndex) => (
-              <div key={`step-${stepIndex}`} className="border rounded-lg mb-4">
-                <div className="p-4 border-b">
-                  <h4 className="font-medium">Step {stepIndex + 1}</h4>
-                </div>
-                <div className="p-4">
-                  <p className="mb-2">{step.description}</p>
+            {initialSteps.map((step, stepIndex) => {
+              // Get the previous step (if available)
+              const prevStep = stepIndex > 0 ? initialSteps[stepIndex - 1] as AllocationStep : undefined;
+              
+              // Find the pivot cell for this step
+              const inferredPivotCell = step.type === "allocation" 
+                ? findPivotCellForStep(step as AllocationStep, prevStep as AllocationStep) 
+                : undefined;
 
-                  {step.type === "allocation" && step.remainingSupply && step.remainingDemand && (
-                    <div className="overflow-x-auto mt-2">
-                      <table className="w-full border-collapse">
-                        <thead>
-                          <tr>
-                            <th className="p-2 border"></th>
-                            {Array.from({ length: problem.demand.length }).map((_, index) => (
-                              <th
-                                key={`step-header-dest-${index}`}
-                                className={`p-2 border ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
-                              >
-                                D{index + 1}
-                                {isDummyCell(0, index) && <span className="text-xs text-gray-500"> (Dummy)</span>}
-                              </th>
-                            ))}
-                            <th className="p-2 border">Supply</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {Array.from({ length: problem.supply.length }).map((_, sourceIndex) => (
-                            <tr key={`step-row-${sourceIndex}`}>
-                              <th className={`p-2 border ${isDummyCell(sourceIndex, 0) ? "bg-gray-100" : ""}`}>
-                                S{sourceIndex + 1}
-                                {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
-                              </th>
-                              {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
-                                const allocationsForStep = (step as AllocationStep).allAllocations || [];
-                                const allocation = allocationsForStep.find(
-                                  (a) => a.source === sourceIndex && a.destination === destIndex
-                                );
-                                const isEpsilon = (step as AllocationStep).epsilonGrid?.[sourceIndex]?.[destIndex]; // USE STEP'S GRID
+              return (
+                <div key={`step-${stepIndex}`} className="border rounded-lg mb-4">
+                  <div className="p-4 border-b">
+                    <h4 className="font-medium">Step {stepIndex + 1}</h4>
+                  </div>
+                  <div className="p-4">
+                    <p className="mb-2">{step.description}</p>
 
-                                return (
-                                  <td
-                                    key={`step-cell-${sourceIndex}-${destIndex}`}
-                                    className={`p-2 border text-center ${
-                                      allocation ? "bg-blue-600/10" : ""
-                                    }`}
-                                  >
-                                    {allocation ? (
-                                      <div>
-                                        <div className="font-bold">
-                                          {isEpsilon ? "ε" : formatNumber(allocation.value)} {/* DISPLAY ε */}
+                    {step.type === "allocation" && step.remainingSupply && step.remainingDemand && (
+                      <div className="overflow-x-auto mt-2">
+                        <table className="w-full border-collapse">
+                          <thead>
+                            <tr>
+                              <th className="p-2 border"></th>
+                              {Array.from({ length: problem.demand.length }).map((_, index) => (
+                                <th
+                                  key={`step-header-dest-${index}`}
+                                  className={`p-2 border ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                >
+                                  D{index + 1}
+                                  {isDummyCell(0, index) && <span className="text-xs text-gray-500"> (Dummy)</span>}
+                                </th>
+                              ))}
+                              <th className="p-2 border">Supply</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Array.from({ length: problem.supply.length }).map((_, sourceIndex) => (
+                              <tr key={`step-row-${sourceIndex}`}>
+                                <th className={`p-2 border ${isDummyCell(sourceIndex, 0) ? "bg-gray-100" : ""}`}>
+                                  S{sourceIndex + 1}
+                                  {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
+                                </th>
+                                {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
+                                  const allocationsForStep = (step as AllocationStep).allAllocations || [];
+                                  const allocation = allocationsForStep.find(
+                                    (a) => a.source === sourceIndex && a.destination === destIndex
+                                  );
+                                  const isEpsilon = (step as AllocationStep).epsilonGrid?.[sourceIndex]?.[destIndex];
+
+                                  // Check if this is a pivot cell - using both explicit pivotCell and our inferred one
+                                  const isPivotCell = 
+                                    ((step as AllocationStep).pivotCell?.source === sourceIndex && 
+                                     (step as AllocationStep).pivotCell?.destination === destIndex) ||
+                                    (inferredPivotCell?.source === sourceIndex && 
+                                     inferredPivotCell?.destination === destIndex);
+
+                                  return (
+                                    <td
+                                      key={`step-cell-${sourceIndex}-${destIndex}`}
+                                      className={`p-2 border text-center ${
+                                        isPivotCell
+                                          ? "bg-yellow-300 border-yellow-600 border-2"
+                                          : allocation
+                                            ? "bg-blue-600/10"
+                                            : ""
+                                      }`}
+                                    >
+                                      {allocation ? (
+                                        <div>
+                                          <div className="font-bold">
+                                            {isEpsilon ? "ε" : formatNumber(allocation.value)} {/* DISPLAY ε */}
+                                          </div>
+                                          <div className="text-xs text-gray-500">
+                                            Cost: {problem.costs[sourceIndex][destIndex]}
+                                          </div>
                                         </div>
+                                      ) : (
                                         <div className="text-xs text-gray-500">
                                           Cost: {problem.costs[sourceIndex][destIndex]}
                                         </div>
-                                      </div>
-                                    ) : (
-                                      <div className="text-xs text-gray-500">
-                                        Cost: {problem.costs[sourceIndex][destIndex]}
-                                      </div>
-                                    )}
-                                  </td>
-                                )
-                              })}
-                              <td className="p-2 border text-center font-medium">
-                                {(() => {
-                                  const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
-                                  const rowHasEpsilonInThisStep = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
-                                  // Use original problem's supply as the base for display
-                                  const originalProblemSupply = problem.supply[sourceIndex];
-                                  const baseValueString = formatNumber(originalProblemSupply);
-                                  return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>;
-                                })()}
-                              </td>
-                            </tr>
-                          ))}
-                          <tr>
-                            <th className="p-2 border">Demand</th>
-                            {(step.remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
-                              const originalProblemDemand = problem.demand[index]; // Get original problem demand for display
-                              const baseValueString = formatNumber(originalProblemDemand);
-                              const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
-                              const colHasEpsilonInThisStep = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
-                              return (
-                                <td
-                                  key={`step-demand-${index}`}
-                                  className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
-                                >
-                                  <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>
+                                      )}
+                                    </td>
+                                  )
+                                })}
+                                <td className="p-2 border text-center font-medium">
+                                  {(() => {
+                                    const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                                    const rowHasEpsilonInThisStep = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
+                                    // Use original problem's supply as the base for display
+                                    const originalProblemSupply = problem.supply[sourceIndex];
+                                    const baseValueString = formatNumber(originalProblemSupply);
+                                    return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>;
+                                  })()}
                                 </td>
-                              );
-                            })}
-                            <td className="p-2 border"></td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                              </tr>
+                            ))}
+                            <tr>
+                              <th className="p-2 border">Demand</th>
+                              {(step.remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
+                                const originalProblemDemand = problem.demand[index]; // Get original problem demand for display
+                                const baseValueString = formatNumber(originalProblemDemand);
+                                const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                                const colHasEpsilonInThisStep = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
+                                return (
+                                  <td
+                                    key={`step-demand-${index}`}
+                                    className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                  >
+                                    <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>
+                                  </td>
+                                );
+                              })}
+                              <td className="p-2 border"></td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
 
-                  {method === "vam" && step.type === "penalty" && (
-                    <div className="mt-2">
-                      <h5 className="font-medium mb-1">Penalties:</h5>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <h6 className="text-sm font-medium">Row Penalties:</h6>
-                          <ul className="list-disc list-inside">
-                            {step.rowPenalties?.map((penalty, idx) => (
-                              <li key={`row-penalty-${idx}`}>
-                                Row {idx + 1}: {formatNumber(penalty)}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        <div>
-                          <h6 className="text-sm font-medium">Column Penalties:</h6>
-                          <ul className="list-disc list-inside">
-                            {step.columnPenalties?.map((penalty, idx) => (
-                              <li key={`col-penalty-${idx}`}>
-                                Column {idx + 1}: {formatNumber(penalty)}
-                              </li>
-                            ))}
-                          </ul>
+                    {method === "vam" && step.type === "penalty" && (
+                      <div className="mt-2">
+                        <h5 className="font-medium mb-1">Penalties:</h5>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <h6 className="text-sm font-medium">Row Penalties:</h6>
+                            <ul className="list-disc list-inside">
+                              {step.rowPenalties?.map((penalty, idx) => (
+                                <li key={`row-penalty-${idx}`}>
+                                  Row {idx + 1}: {formatNumber(penalty)}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div>
+                            <h6 className="text-sm font-medium">Column Penalties:</h6>
+                            <ul className="list-disc list-inside">
+                              {step.columnPenalties?.map((penalty, idx) => (
+                                <li key={`col-penalty-${idx}`}>
+                                  Column {idx + 1}: {formatNumber(penalty)}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Optimization steps */}
