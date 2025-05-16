@@ -155,7 +155,13 @@ export default function SolutionDisplay({
                         </td>
                       );
                     })}
-                    <td className="p-2 border text-center font-medium">{problem.supply[sourceIndex]}</td>
+                    <td className="p-2 border text-center font-medium">
+                      {(() => {
+                        const baseValue = formatNumber(problem.supply[sourceIndex]);
+                        const rowEpsilon = epsilonGridToUse && epsilonGridToUse[sourceIndex]?.some(isEps => isEps);
+                        return <>{baseValue}{rowEpsilon ? <span> + ε</span> : ""}</>;
+                      })()}
+                    </td>
                   </tr>
                 ))}
                 <tr>
@@ -165,7 +171,11 @@ export default function SolutionDisplay({
                       key={`demand-${index}`}
                       className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
                     >
-                      {d}
+                      {(() => {
+                        const baseValue = formatNumber(d);
+                        const colEpsilon = epsilonGridToUse && problem.supply.some((_, rIdx) => epsilonGridToUse[rIdx]?.[index]);
+                        return <>{baseValue}{colEpsilon ? <span> + ε</span> : ""}</>;
+                      })()}
                     </td>
                   ))}
                   <td className="p-2 border"></td>
@@ -305,20 +315,33 @@ export default function SolutionDisplay({
                                 )
                               })}
                               <td className="p-2 border text-center font-medium">
-                                {problem.supply[sourceIndex]}
+                                {(() => {
+                                  const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                                  const rowHasEpsilonInThisStep = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
+                                  // Use original problem's supply as the base for display
+                                  const originalProblemSupply = problem.supply[sourceIndex];
+                                  const baseValueString = formatNumber(originalProblemSupply);
+                                  return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>;
+                                })()}
                               </td>
                             </tr>
                           ))}
                           <tr>
                             <th className="p-2 border">Demand</th>
-                            {(step.remainingDemand ?? problem.demand).map((d, index) => (
-                              <td
-                                key={`step-demand-${index}`}
-                                className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
-                              >
-                                {formatNumber(d)}
-                              </td>
-                            ))}
+                            {(step.remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
+                              const originalProblemDemand = problem.demand[index]; // Get original problem demand for display
+                              const baseValueString = formatNumber(originalProblemDemand);
+                              const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                              const colHasEpsilonInThisStep = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
+                              return (
+                                <td
+                                  key={`step-demand-${index}`}
+                                  className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                >
+                                  <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>
+                                </td>
+                              );
+                            })}
                             <td className="p-2 border"></td>
                           </tr>
                         </tbody>
@@ -469,7 +492,12 @@ export default function SolutionDisplay({
                                       );
                                     })}
                                     <td className="p-2 border text-center font-medium">
-                                      {problem.supply[sourceIndex]}
+                                      {(() => {
+                                        const stepEpsilonGrid = (step as UVStep).epsilonGrid;
+                                        const rowEpsilon = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
+                                        const baseValue = formatNumber(problem.supply[sourceIndex]);
+                                        return <>{baseValue}{rowEpsilon ? <span> + ε</span> : ""}</>;
+                                      })()}
                                     </td>
                                   </tr>
                                 ))}
@@ -480,7 +508,12 @@ export default function SolutionDisplay({
                                       key={`curr-demand-${index}`}
                                       className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
                                     >
-                                      {d}
+                                      {(() => {
+                                        const stepEpsilonGrid = (step as UVStep).epsilonGrid;
+                                        const colEpsilon = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
+                                        const baseValue = formatNumber(d);
+                                        return <>{baseValue}{colEpsilon ? <span> + ε</span> : ""}</>;
+                                      })()}
                                     </td>
                                   ))}
                                   <td className="p-2 border"></td>
@@ -642,20 +675,33 @@ export default function SolutionDisplay({
                                     );
                                   })}
                                   <td className="p-2 border text-center font-medium">
-                                    {formatNumber(step.remainingSupply?.[sourceIndex] ?? problem.supply[sourceIndex])}
+                                    {(() => {
+                                      const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                                      const rowHasEpsilonInThisStep = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
+                                      // Use original problem's supply as the base for display
+                                      const originalProblemSupply = problem.supply[sourceIndex];
+                                      const baseValueString = formatNumber(originalProblemSupply);
+                                      return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>;
+                                    })()}
                                   </td>
                                 </tr>
                               ))}
                               <tr>
                                 <th className="p-2 border">Demand</th>
-                                {(step.remainingDemand ?? problem.demand).map((d, index) => (
-                                  <td
-                                    key={`step-demand-${index}`}
-                                    className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
-                                  >
-                                    {formatNumber(d)}
-                                  </td>
-                                ))}
+                                {(step.remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
+                                  const originalProblemDemand = problem.demand[index]; // Get original problem demand for display
+                                  const baseValueString = formatNumber(originalProblemDemand);
+                                  const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
+                                  const colHasEpsilonInThisStep = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
+                                  return (
+                                    <td
+                                      key={`step-demand-${index}`}
+                                      className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
+                                    >
+                                      <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>
+                                    </td>
+                                  );
+                                })}
                                 <td className="p-2 border"></td>
                               </tr>
                             </tbody>
