@@ -380,19 +380,19 @@ export default function SolutionDisplay({
                                   {(() => {
                                     const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
                                     const rowHasEpsilonInThisStep = stepEpsilonGrid && stepEpsilonGrid[sourceIndex]?.some(isEps => isEps);
-                                    // Use original problem's supply as the base for display
-                                    const originalProblemSupply = problem.supply[sourceIndex];
-                                    const baseValueString = formatNumber(originalProblemSupply);
-                                    return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>;
+                                    // Use step's remaining supply for display
+                                    const currentStepSupply = (step as AllocationStep).remainingSupply?.[sourceIndex] ?? 0;
+                                    const baseValueString = formatNumber(currentStepSupply);
+                                    return <>{baseValueString}{rowHasEpsilonInThisStep && baseValueString !== "ε" && currentStepSupply !== 0 ? <span> + ε</span> : ""}</>;
                                   })()}
                                 </td>
                               </tr>
                             ))}
                             <tr>
                               <th className="p-2 border">Demand</th>
-                              {(step.remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
-                                const originalProblemDemand = problem.demand[index]; // Get original problem demand for display
-                                const baseValueString = formatNumber(originalProblemDemand);
+                              {((step as AllocationStep).remainingDemand!).map((d_step_remaining, index) => { // d_step_remaining is the remaining demand for the step
+                                // Use step's remaining demand for display
+                                const baseValueString = formatNumber(d_step_remaining);
                                 const stepEpsilonGrid = (step as AllocationStep).epsilonGrid;
                                 const colHasEpsilonInThisStep = stepEpsilonGrid && problem.supply.some((_, rIdx) => stepEpsilonGrid[rIdx]?.[index]);
                                 return (
@@ -400,7 +400,7 @@ export default function SolutionDisplay({
                                     key={`step-demand-${index}`}
                                     className={`p-2 border text-center font-medium ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
                                   >
-                                    <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" ? <span> + ε</span> : ""}</>
+                                    <>{baseValueString}{colHasEpsilonInThisStep && baseValueString !== "ε" && d_step_remaining !== 0 ? <span> + ε</span> : ""}</>
                                   </td>
                                 );
                               })}
