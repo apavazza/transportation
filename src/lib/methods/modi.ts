@@ -22,48 +22,52 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
   const m = supply.length;
   const n = demand.length;
 
-  // Initialize currentSolution based on initialSolution
   let currentSolutionAllocations = initialSolution.allocations.map(a => ({ ...a }));
   let currentSolutionEpsilonGrid = createEpsilonGridFromAllocations(currentSolutionAllocations, m, n);
   let currentSolutionTotalCost = calculateTotalCost(currentSolutionAllocations, costs);
 
-  // These 'bestSolution' variables are used to track the best state found.
-  // We will still track them, but the final return will be based on 'currentSolution'.
-  let bestSolutionAllocations = currentSolutionAllocations.map(a => ({ ...a }));
-  // let bestSolutionEpsilonGrid = currentSolutionEpsilonGrid.map(row => [...row]); // Not strictly needed if returning current
-  let bestSolutionTotalCost = currentSolutionTotalCost;
-
   const steps: Step[] = [];
-  let iteration = 1;
-  let isOptimal = false; // This will reflect the optimality of the *last computed state*
+  let iteration = 1; // Tracks the main MODI optimization iterations
+  let isOptimal = false;
 
-  while (!isOptimal && iteration <= 20) { // Max iterations
+  while (!isOptimal && iteration <= 20) {
     const requiredAllocations = m + n - 1;
 
     if (currentSolutionAllocations.length < requiredAllocations) {
       const updatedAllocations = handleDegenerateCase(currentSolutionAllocations, costs, m, n);
-      currentSolutionAllocations = updatedAllocations;
+      currentSolutionAllocations = updatedAllocations; // Update current state
       currentSolutionEpsilonGrid = createEpsilonGridFromAllocations(updatedAllocations, m, n);
+      currentSolutionTotalCost = calculateTotalCost(updatedAllocations, costs);
+
+      // Calculate remaining supply and demand for this step based on updatedAllocations
+      const stepRemainingSupply = [...problem.supply]; // Start with original problem supply
+      const stepRemainingDemand = [...problem.demand]; // Start with original problem demand
+
+      for (const alloc of updatedAllocations) {
+        stepRemainingSupply[alloc.source] -= alloc.value;
+        stepRemainingDemand[alloc.destination] -= alloc.value;
+      }
+      // Ensure no negative values due to float precision, set to 0 if very small
+      for(let i=0; i<stepRemainingSupply.length; i++) {
+        if(Math.abs(stepRemainingSupply[i]) < 1e-9) stepRemainingSupply[i] = 0;
+      }
+      for(let i=0; i<stepRemainingDemand.length; i++) {
+        if(Math.abs(stepRemainingDemand[i]) < 1e-9) stepRemainingDemand[i] = 0;
+      }
 
       steps.push({
         type: "allocation",
-        description: "Degenerate fix: ε allocated",
-        remainingSupply: [...problem.supply],
-        remainingDemand: [...problem.demand],
+        description: `Degeneracy fix: ε allocated (Preparing for Iteration ${iteration})`,
         allAllocations: updatedAllocations.map(a => ({...a})),
-        epsilonGrid: currentSolutionEpsilonGrid.map(row => [...row]), // Deep copy
+        epsilonGrid: currentSolutionEpsilonGrid.map(row => [...row]),
+        remainingSupply: stepRemainingSupply, // Populate this
+        remainingDemand: stepRemainingDemand  // Populate this
       } as AllocationStep);
-
-      currentSolutionTotalCost = calculateTotalCost(updatedAllocations, costs);
-      // Update bestSolution if this degenerate fix leads to a better state (unlikely but for completeness)
-      if (currentSolutionTotalCost < bestSolutionTotalCost) {
-         bestSolutionAllocations = currentSolutionAllocations.map(a => ({ ...a }));
-         // bestSolutionEpsilonGrid = currentSolutionEpsilonGrid.map(row => [...row]);
-         bestSolutionTotalCost = currentSolutionTotalCost;
-      }
       
-      iteration++;
-      continue;
+      // After fixing degeneracy, we want the loop to re-evaluate with the fixed allocations
+      // for the *same* iteration number's UV calculations. So, we 'continue'.
+      // 'iteration' will be incremented at the end of the main loop body.
+      continue; 
     }
 
     const { uValues, vValues, success } = calculateUVValues(currentSolutionAllocations, costs);
@@ -131,9 +135,12 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
       continue;
     }
 
+    // Get the opportunity cost for the entering cell to include in the description
+    const enteringCellOpportunityCost = opportunityCosts[enteringCell.source][enteringCell.destination];
+
     steps.push({
       type: "uv",
-      description: `Iteration ${iteration}: Entering (S${enteringCell.source+1},D${enteringCell.destination+1}), Leaving θ=${leavingValue.toFixed(Math.abs(leavingValue) < 1e-5 && leavingValue !== 0 ? 7 : 2)}`,
+      description: `Iteration ${iteration}: Entering (S${enteringCell.source+1},D${enteringCell.destination+1}) with opportunity cost ${enteringCellOpportunityCost.toFixed(2)}`, // MODIFIED LINE
       uValues, vValues, opportunityCosts, enteringCell, cycle, leavingValue,
       allAllocations: currentSolutionAllocations.map(a => ({ ...a })), // State *before* this iteration's update
       epsilonGrid: currentSolutionEpsilonGrid.map(row => [...row]),    // Grid *before* this iteration's update
@@ -146,14 +153,7 @@ export function optimizeWithMODI(problem: TransportationProblem, initialSolution
     currentSolutionTotalCost = calculateTotalCost(newAllocations, costs);
 
 
-    // Update best solution tracker (optional if you only care about the last step for final display)
-    if (currentSolutionTotalCost < bestSolutionTotalCost - 1e-9) {
-      bestSolutionAllocations = currentSolutionAllocations.map(a => ({ ...a }));
-      // bestSolutionEpsilonGrid = currentSolutionEpsilonGrid.map(row => [...row]);
-      bestSolutionTotalCost = currentSolutionTotalCost;
-    }
-    
-    iteration++;
+    iteration++; // Increment for the next main MODI iteration (UV, cycle, etc.)
   }
 
   // Return the state of the currentSolution as it was at the end of the loop
