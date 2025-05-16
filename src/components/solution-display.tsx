@@ -1,5 +1,5 @@
 "use client"
-import type { TransportationProblem, Solution, Method, OptimizationResult, Allocation, Cell, AllocationStep } from "@/src/lib/types"
+import type { TransportationProblem, Solution, Method, OptimizationResult, Allocation, AllocationStep, UVStep } from "@/src/lib/types"
 
 interface SolutionDisplayProps {
   solution: Solution | OptimizationResult
@@ -37,80 +37,6 @@ export default function SolutionDisplay({
   const initialSteps = initialSolution.steps
   const optimizationSteps = optimizedSolution ? optimizedSolution.steps : []
 
-  // Function to get allocations at a specific step
-  const getAllocationsAtStep = (stepIndex: number): Allocation[] => {
-    if (!isOptimizationResult || stepIndex < initialSteps.length) {
-      // For initial solution steps
-      const allocations: Allocation[] = []
-      for (let i = 0; i <= stepIndex; i++) {
-        const step = initialSteps[i]
-        if (step.type === "allocation" && "allocation" in step && step.allocation) {
-          allocations.push(step.allocation)
-        }
-      }
-      return allocations
-    } else {
-      // For optimization steps
-      const optimizationStepIndex = stepIndex - initialSteps.length
-
-      // Start with the initial solution's allocations
-      let allocations = [...initialSolution.allocations]
-
-      // Apply each optimization step up to the current one
-      for (let i = 0; i <= optimizationStepIndex; i++) {
-        const step = optimizationSteps[i]
-        if (step.type === "uv" && step.cycle && step.leavingValue) {
-          // Apply the cycle changes to the allocations
-          allocations = applyUVStep(allocations, step.cycle, step.leavingValue)
-        }
-      }
-
-      return allocations
-    }
-  }
-
-  // Function to apply a UV step to the allocations
-  const applyUVStep = (
-    allocations: Allocation[],
-    cycle: Cell[],
-    leavingValue: number,
-  ): Allocation[] => {
-    if (!cycle || cycle.length === 0) return allocations
-
-    // Create a deep copy of allocations
-    const newAllocations = JSON.parse(JSON.stringify(allocations)) as Allocation[]
-
-    // Apply the cycle changes
-    for (let i = 0; i < cycle.length; i++) {
-      const cell = cycle[i]
-      const sign = i % 2 === 0 ? 1 : -1 // Add to even-indexed cells, subtract from odd-indexed
-
-      // Find if this cell already has an allocation
-      const existingIndex = newAllocations.findIndex(
-        (a) => a.source === cell.source && a.destination === cell.destination,
-      )
-
-      if (existingIndex >= 0) {
-        // Update existing allocation
-        newAllocations[existingIndex].value += sign * leavingValue
-
-        // Remove allocation if it becomes zero
-        if (Math.abs(newAllocations[existingIndex].value) < 0.000001) {
-          newAllocations.splice(existingIndex, 1)
-        }
-      } else {
-        // Add new allocation
-        newAllocations.push({
-          source: cell.source,
-          destination: cell.destination,
-          value: sign * leavingValue, // This will be the entering variable
-        })
-      }
-    }
-
-    return newAllocations
-  }
-
   // Function to format numbers to avoid displaying infinity
   const formatNumber = (num: number): string => {
     if (!isFinite(num)) return "0";
@@ -142,7 +68,12 @@ export default function SolutionDisplay({
   }
 
   // Function to render an allocation table
-  const renderAllocationTable = (allocations: Allocation[], title: string, showCostImprovement = false) => {
+  const renderAllocationTable = (
+    allocations: Allocation[],
+    title: string,
+    showCostImprovement = false,
+    epsilonGridToUse?: boolean[][] // Parameter for the grid
+  ) => {
     // Calculate total cost
     const totalCost = allocations.reduce(
       (sum, allocation) => sum + allocation.value * problem.costs[allocation.source][allocation.destination],
@@ -200,8 +131,9 @@ export default function SolutionDisplay({
                     {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
                       const allocation = allocations.find(
                         (a) => a.source === sourceIndex && a.destination === destIndex,
-                      )
-                      const isDummy = isDummyCell(sourceIndex, destIndex)
+                      );
+                      const isDummy = isDummyCell(sourceIndex, destIndex);
+                      const isEpsilon = epsilonGridToUse?.[sourceIndex]?.[destIndex]; // USE THE GRID
 
                       return (
                         <td
@@ -212,14 +144,16 @@ export default function SolutionDisplay({
                         >
                           {allocation ? (
                             <div>
-                              <div className="font-bold">{formatNumber(allocation.value)}</div>
+                              <div className="font-bold">
+                                {isEpsilon ? "ε" : formatNumber(allocation.value)} {/* DISPLAY ε */}
+                              </div>
                               <div className="text-xs text-gray-500">Cost: {problem.costs[sourceIndex][destIndex]}</div>
                             </div>
                           ) : (
                             <div className="text-xs text-gray-500">Cost: {problem.costs[sourceIndex][destIndex]}</div>
                           )}
                         </td>
-                      )
+                      );
                     })}
                     <td className="p-2 border text-center font-medium">{problem.supply[sourceIndex]}</td>
                   </tr>
@@ -241,8 +175,8 @@ export default function SolutionDisplay({
           </div>
         </div>
       </div>
-    )
-  }
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -255,12 +189,12 @@ export default function SolutionDisplay({
       {viewMode === "solution" ? (
         <div className="space-y-4">
           {/* Initial solution */}
-          {renderAllocationTable(initialSolution.allocations, "Initial Solution")}
+          {renderAllocationTable(initialSolution.allocations, "Initial Solution", false, initialSolution.epsilonGrid)}
 
           {/* Optimized solution (if available) */}
           {isOptimizationResult && optimizedSolution && (
             <>
-              {renderAllocationTable(optimizedSolution.allocations, "Optimized Solution (MODI Method)", true)}
+              {renderAllocationTable(optimizedSolution.allocations, "Optimized Solution (MODI Method)", true, optimizedSolution.epsilonGrid)}
 
               <div className="border rounded-lg">
                 <div className="p-4 border-b">
@@ -340,16 +274,11 @@ export default function SolutionDisplay({
                                 {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
                               </th>
                               {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
-                                const relevantAllocations = step.allAllocations 
-                                  ? step.allAllocations 
-                                  : initialSteps
-                                      .slice(0, stepIndex + 1)
-                                      .filter((s) => s.type === "allocation" && "allocation" in s && s.allocation)
-                                      .map((s) => (s as AllocationStep).allocation!);
-
-                                const allocation = relevantAllocations.find(
+                                const allocationsForStep = (step as AllocationStep).allAllocations || [];
+                                const allocation = allocationsForStep.find(
                                   (a) => a.source === sourceIndex && a.destination === destIndex
                                 );
+                                const isEpsilon = (step as AllocationStep).epsilonGrid?.[sourceIndex]?.[destIndex]; // USE STEP'S GRID
 
                                 return (
                                   <td
@@ -360,7 +289,9 @@ export default function SolutionDisplay({
                                   >
                                     {allocation ? (
                                       <div>
-                                        <div className="font-bold">{formatNumber(allocation.value)}</div>
+                                        <div className="font-bold">
+                                          {isEpsilon ? "ε" : formatNumber(allocation.value)} {/* DISPLAY ε */}
+                                        </div>
                                         <div className="text-xs text-gray-500">
                                           Cost: {problem.costs[sourceIndex][destIndex]}
                                         </div>
@@ -432,8 +363,8 @@ export default function SolutionDisplay({
             <div>
               <h4 className="font-medium text-lg mb-4 pb-2 border-b">Optimization Steps (MODI Method)</h4>
               {optimizationSteps.map((step, stepIndex) => {
-                const overallStepIndex = initialSteps.length + stepIndex
-                const currentAllocations = getAllocationsAtStep(overallStepIndex)
+                // const overallStepIndex = initialSteps.length + stepIndex;
+                // const currentAllocations = getAllocationsAtStep(overallStepIndex); // Use step.allAllocations instead
 
                 return (
                   <div key={`opt-step-${stepIndex}`} className="border rounded-lg mb-4">
@@ -442,11 +373,9 @@ export default function SolutionDisplay({
                     </div>
                     <div className="p-4">
                       <p className="mb-2">{step.description}</p>
-
                       {step.type === "uv" && (
                         <div className="mt-2">
-                          {/* Current allocation table with cycle visualization */}
-                          <h5 className="font-medium mb-2">Current Allocation:</h5>
+                          <h5 className="font-medium mb-2">Current Allocation (Before Cycle Change):</h5>
                           <div className="overflow-x-auto mb-4 relative">
                             <table className="w-full border-collapse">
                               <thead>
@@ -474,31 +403,20 @@ export default function SolutionDisplay({
                                       )}
                                     </th>
                                     {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
-                                      const allocation = currentAllocations.find(
+                                      const allocationsForStep = (step as UVStep).allAllocations || [];
+                                      const allocation = allocationsForStep.find(
                                         (a) => a.source === sourceIndex && a.destination === destIndex,
-                                      )
-
-                                      // Check if this cell is part of the cycle
-                                      let isCycleCell = false
-                                      let cycleSign = 0
-                                      let cycleIndex = -1
-
-                                      if (step.cycle) {
-                                        cycleIndex = step.cycle.findIndex(
-                                          (c) => c.source === sourceIndex && c.destination === destIndex,
-                                        )
-                                        if (cycleIndex >= 0) {
-                                          isCycleCell = true
-                                          cycleSign = cycleIndex % 2 === 0 ? 1 : -1
-                                        }
+                                      );
+                                      const isEpsilon = (step as UVStep).epsilonGrid?.[sourceIndex]?.[destIndex];
+                                      const isDummy = isDummyCell(sourceIndex, destIndex);
+                                      const cycleCells = step.cycle || [];
+                                      const isCycleCell = cycleCells.some(c => c.source === sourceIndex && c.destination === destIndex);
+                                      let cycleSign = 0;
+                                      if (isCycleCell) {
+                                        const cycleCellIndex = cycleCells.findIndex(c => c.source === sourceIndex && c.destination === destIndex);
+                                        cycleSign = cycleCellIndex % 2 === 0 ? 1 : -1;
                                       }
-
-                                      // Check if this is the entering cell
-                                      const isEnteringCell =
-                                        step.enteringCell?.source === sourceIndex &&
-                                        step.enteringCell?.destination === destIndex
-
-                                      const isDummy = isDummyCell(sourceIndex, destIndex)
+                                      const isEnteringCell = step.enteringCell?.source === sourceIndex && step.enteringCell?.destination === destIndex;
 
                                       return (
                                         <td
@@ -520,7 +438,7 @@ export default function SolutionDisplay({
                                           {allocation ? (
                                             <div>
                                               <div className="font-bold">
-                                                {formatNumber(allocation.value)}
+                                                {isEpsilon ? "ε" : formatNumber(allocation.value)}
                                                 {isCycleCell && (
                                                   <span className={cycleSign > 0 ? "text-green-600" : "text-red-600"}>
                                                     {cycleSign > 0 ? " (+)" : " (-)"}
@@ -533,7 +451,6 @@ export default function SolutionDisplay({
                                             </div>
                                           ) : (
                                             <div>
-                                              {/* Show sign for empty cells that are part of the cycle */}
                                               {(isEnteringCell || isCycleCell) && (
                                                 <div
                                                   className={`font-bold ${
@@ -549,7 +466,7 @@ export default function SolutionDisplay({
                                             </div>
                                           )}
                                         </td>
-                                      )
+                                      );
                                     })}
                                     <td className="p-2 border text-center font-medium">
                                       {problem.supply[sourceIndex]}
@@ -572,125 +489,104 @@ export default function SolutionDisplay({
                             </table>
                           </div>
 
+                          {/* START: Display U and V values */}
                           {step.uValues && step.vValues && (
-                            <div className="mb-4">
-                              <h5 className="font-medium mb-1">U and V Values:</h5>
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <h6 className="text-sm font-medium">U Values:</h6>
-                                  <ul className="list-disc list-inside">
-                                    {step.uValues.map((value, idx) => (
-                                      <li key={`u-value-${idx}`}>
-                                        U{idx + 1}: {formatNumber(value)}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                                <div>
-                                  <h6 className="text-sm font-medium">V Values:</h6>
-                                  <ul className="list-disc list-inside">
-                                    {step.vValues.map((value, idx) => (
-                                      <li key={`v-value-${idx}`}>
-                                        V{idx + 1}: {formatNumber(value)}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                              <div>
+                                <h5 className="font-medium mb-1 text-sm">U Values (Sources)</h5>
+                                <ul className="list-disc list-inside text-xs">
+                                  {step.uValues.map((u, index) => (
+                                    <li key={`u-val-${index}`}>
+                                      U<sub>{index + 1}</sub>: {formatNumber(u)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div>
+                                <h5 className="font-medium mb-1 text-sm">V Values (Destinations)</h5>
+                                <ul className="list-disc list-inside text-xs">
+                                  {step.vValues.map((v, index) => (
+                                    <li key={`v-val-${index}`}>
+                                      V<sub>{index + 1}</sub>: {formatNumber(v)}
+                                    </li>
+                                  ))}
+                                </ul>
                               </div>
                             </div>
                           )}
+                          {/* END: Display U and V values */
 
-                          {step.opportunityCosts && (
+                          /* START: Display Opportunity Costs */
+                          step.opportunityCosts && (
                             <div className="mb-4">
-                              <h5 className="font-medium mb-1">Opportunity Costs (Cij - (Ui + Vj)):</h5>
+                              <h5 className="font-medium mb-2 text-sm">Opportunity Costs (C<sub>ij</sub> - U<sub>i</sub> - V<sub>j</sub>)</h5>
                               <div className="overflow-x-auto">
-                                <table className="w-full border-collapse">
+                                <table className="w-full border-collapse text-xs">
                                   <thead>
                                     <tr>
-                                      <th className="p-2 border"></th>
-                                      {Array.from({ length: problem.demand.length }).map((_, index) => (
-                                        <th
-                                          key={`opp-header-${index}`}
-                                          className={`p-2 border ${isDummyCell(0, index) ? "bg-gray-100" : ""}`}
-                                        >
-                                          D{index + 1}
+                                      <th className="p-1 border bg-gray-50"></th>
+                                      {Array.from({ length: problem.demand.length }).map((_, destIndex) => (
+                                        <th key={`opp-th-d-${destIndex}`} className={`p-1 border bg-gray-50 ${isDummyCell(0, destIndex) ? "font-normal text-gray-400" : ""}`}>
+                                          D{destIndex + 1}
+                                          {isDummyCell(0, destIndex) && <span className="text-xs"> (Dummy)</span>}
                                         </th>
                                       ))}
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {step.opportunityCosts.map((row, rowIndex) => (
-                                      <tr key={`opp-row-${rowIndex}`}>
-                                        <th className={`p-2 border ${isDummyCell(rowIndex, 0) ? "bg-gray-100" : ""}`}>
-                                          S{rowIndex + 1}
+                                    {step.opportunityCosts.map((row, sourceIndex) => (
+                                      <tr key={`opp-tr-${sourceIndex}`}>
+                                        <th className={`p-1 border bg-gray-50 ${isDummyCell(sourceIndex, 0) ? "font-normal text-gray-400" : ""}`}>
+                                          S{sourceIndex + 1}
+                                          {isDummyCell(sourceIndex, 0) && <span className="text-xs"> (Dummy)</span>}
                                         </th>
-                                        {row.map((cost, colIndex) => {
-                                          const isEnteringCell =
-                                            step.enteringCell?.source === rowIndex &&
-                                            step.enteringCell?.destination === colIndex
-
-                                          // Check if this is a basic cell (has allocation)
-                                          const isBasicCell = currentAllocations.some(
-                                            (a) => a.source === rowIndex && a.destination === colIndex,
-                                          )
-
-                                          const isDummy = isDummyCell(rowIndex, colIndex)
-
+                                        {row.map((cost, destIndex) => {
+                                          const isCurrentEnteringCell = step.enteringCell?.source === sourceIndex && step.enteringCell?.destination === destIndex;
+                                          const isAllocated = (step.allAllocations || []).some(a => a.source === sourceIndex && a.destination === destIndex);
+                                          
                                           return (
                                             <td
-                                              key={`opp-cell-${rowIndex}-${colIndex}`}
-                                              className={`p-2 border text-center ${
-                                                isDummy
-                                                  ? "bg-gray-100"
-                                                  : isEnteringCell
-                                                    ? "bg-yellow-300 border-yellow-600 border-2"
-                                                    : cost < 0
-                                                      ? "bg-red-100"
-                                                      : isBasicCell
-                                                        ? "bg-gray-100"
-                                                        : ""
+                                              key={`opp-td-${sourceIndex}-${destIndex}`}
+                                              className={`p-1 border text-center ${
+                                                isCurrentEnteringCell ? "bg-yellow-300 font-bold border-yellow-500 border-2" :
+                                                isAllocated ? "bg-gray-100 text-gray-400" : 
+                                                cost < -1e-9 ? "bg-red-100 text-red-700 font-semibold" : 
+                                                ""
                                               }`}
                                             >
-                                              <span className={isBasicCell ? "text-gray-500" : ""}>
-                                                {formatNumber(cost)}
-                                              </span>
+                                              {isAllocated ? "0*" : formatNumber(cost)}
                                             </td>
-                                          )
+                                          );
                                         })}
                                       </tr>
                                     ))}
                                   </tbody>
                                 </table>
+                                <p className="text-xs text-gray-500 mt-1">* Basic (allocated) cells have an opportunity cost of 0 by definition.</p>
                               </div>
                             </div>
                           )}
+                          {/* END: Display Opportunity Costs */}
 
-                          {step.cycle && step.cycle.length > 0 && (
-                            <div className="mb-4">
-                              <h5 className="font-medium mb-1">Cycle:</h5>
+                          {/* START: Display Cycle Info */
+                          step.cycle && step.cycle.length > 0 && step.leavingValue !== undefined && (
+                            <div className="mb-4 text-xs">
+                              <h5 className="font-medium mb-1 text-sm">Cycle and Reallocation</h5>
                               <p>
-                                {step.cycle.map((cell, idx) => (
-                                  <span key={`cycle-${idx}`}>
-                                    (S{cell.source + 1}, D{cell.destination + 1})
-                                    <span className={idx % 2 === 0 ? "text-green-600" : "text-red-600"}>
-                                      {idx % 2 === 0 ? " (+)" : " (-)"}
-                                    </span>
-                                    {idx < (step.cycle?.length ?? 0) - 1 ? " → " : ""}
-                                  </span>
-                                ))}
+                                Entering Cell: (S{step.enteringCell!.source + 1}, D{step.enteringCell!.destination + 1})
                               </p>
-                              {step.leavingValue && (
-                                <p className="mt-1">
-                                  Leaving value: <span className="font-medium">{formatNumber(step.leavingValue)}</span>
-                                </p>
-                              )}
+                              <p>
+                                Leaving Value (θ): {formatNumber(step.leavingValue)}
+                              </p>
+                              <p>
+                                Cycle Path: {step.cycle.map(c => `(S${c.source + 1},D${c.destination + 1})`).join(" → ")}
+                              </p>
                             </div>
                           )}
+                          {/* END: Display Cycle Info */}
                         </div>
                       )}
-
-                      {/* If this is an allocation step, show the same allocation table used in the initial steps */}
-                      {step.type === "allocation" && step.remainingSupply && step.remainingDemand && (
+                      {step.type === "allocation" && step.remainingSupply && step.remainingDemand && ( // Degenerate fix step
                         <div className="overflow-x-auto mt-2">
                           <table className="w-full border-collapse">
                             <thead>
@@ -716,17 +612,11 @@ export default function SolutionDisplay({
                                     {isDummyCell(sourceIndex, 0) && <span className="text-xs text-gray-500"> (Dummy)</span>}
                                   </th>
                                   {Array.from({ length: problem.demand.length }).map((_, destIndex) => {
-                                    const relevantAllocations = step.allAllocations 
-                                      ? step.allAllocations 
-                                      : initialSteps
-                                          .slice(0, stepIndex + 1)
-                                          .filter((s) => s.type === "allocation" && "allocation" in s && s.allocation)
-                                          .map((s) => (s as AllocationStep).allocation!);
-
-                                    const allocation = relevantAllocations.find(
+                                    const allocationsForStep = (step as AllocationStep).allAllocations || [];
+                                    const allocation = allocationsForStep.find(
                                       (a) => a.source === sourceIndex && a.destination === destIndex
                                     );
-
+                                    const isEpsilon = (step as AllocationStep).epsilonGrid?.[sourceIndex]?.[destIndex]; // USE STEP'S GRID
                                     return (
                                       <td
                                         key={`step-cell-${sourceIndex}-${destIndex}`}
@@ -736,7 +626,9 @@ export default function SolutionDisplay({
                                       >
                                         {allocation ? (
                                           <div>
-                                            <div className="font-bold">{formatNumber(allocation.value)}</div>
+                                            <div className="font-bold">
+                                              {isEpsilon ? "ε" : formatNumber(allocation.value)} {/* DISPLAY ε */}
+                                            </div>
                                             <div className="text-xs text-gray-500">
                                               Cost: {problem.costs[sourceIndex][destIndex]}
                                             </div>
@@ -747,7 +639,7 @@ export default function SolutionDisplay({
                                           </div>
                                         )}
                                       </td>
-                                    )
+                                    );
                                   })}
                                   <td className="p-2 border text-center font-medium">
                                     {formatNumber(step.remainingSupply?.[sourceIndex] ?? problem.supply[sourceIndex])}
@@ -772,7 +664,7 @@ export default function SolutionDisplay({
                       )}
                     </div>
                   </div>
-                )
+                );
               })}
             </div>
           )}

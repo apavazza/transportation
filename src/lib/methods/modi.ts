@@ -1,186 +1,187 @@
-import type { TransportationProblem, Solution, Allocation, Step, Cell } from "../types"
+import type { TransportationProblem, Solution, Allocation, Step, Cell, UVStep, AllocationStep } from "../types"; // Ensure UVStep and AllocationStep are imported if used for casting
+
+// Helper function to create an epsilon grid from allocations
+const createEpsilonGridFromAllocations = (
+  allocs: Allocation[],
+  numSources: number,
+  numDestinations: number,
+): boolean[][] => {
+  const grid = Array(numSources)
+    .fill(null)
+    .map(() => Array(numDestinations).fill(false));
+  for (const alloc of allocs) {
+    if (Math.abs(alloc.value - 0.000001) < 1e-9) { // Check for epsilon
+      grid[alloc.source][alloc.destination] = true;
+    }
+  }
+  return grid;
+};
 
 export function optimizeWithMODI(problem: TransportationProblem, initialSolution: Solution): Solution {
-  const { supply, demand, costs } = problem
-  let currentSolution = { ...initialSolution, allocations: [...initialSolution.allocations] }
-  const steps: Step[] = []
-  let iteration = 1
-  let isOptimal = false
-  
-  // Always track the best solution
-  let bestSolution = { 
+  const { supply, demand, costs } = problem;
+  const m = supply.length;
+  const n = demand.length;
+
+  // Ensure currentSolution and initialSolution have an epsilonGrid
+  const currentSolution = { 
     ...initialSolution, 
-    totalCost: calculateTotalCost(initialSolution.allocations, costs)
+    allocations: initialSolution.allocations.map(a => ({...a})), // Deep copy allocations
+    epsilonGrid: createEpsilonGridFromAllocations(initialSolution.allocations, m, n) 
+  };
+  // If initialSolution itself is part of a larger structure (e.g. OptimizationResult),
+  // it's good practice to ensure the original initialSolution object also gets an epsilonGrid if it didn't have one.
+  if (!initialSolution.epsilonGrid) {
+    initialSolution.epsilonGrid = createEpsilonGridFromAllocations(initialSolution.allocations, m, n);
   }
 
+
+  const steps: Step[] = [];
+  let iteration = 1;
+  let isOptimal = false;
+
+  let bestSolution = {
+    ...currentSolution, // Start best solution from the prepared currentSolution
+    totalCost: calculateTotalCost(currentSolution.allocations, costs),
+    // epsilonGrid is already part of currentSolution, so it's copied here
+  };
+  bestSolution.epsilonGrid = currentSolution.epsilonGrid.map(row => [...row]); // Ensure deep copy for bestSolution
+
   while (!isOptimal && iteration <= 20) {
-    // Step 1: Check if we have the correct number of allocations (m+n-1)
-    const m = supply.length
-    const n = demand.length
-    const requiredAllocations = m + n - 1
+    const requiredAllocations = m + n - 1;
 
     if (currentSolution.allocations.length < requiredAllocations) {
-      // Handle degenerate case by adding epsilon allocations
-      const updatedAllocations = handleDegenerateCase(currentSolution.allocations, costs, m, n)
+      const updatedAllocations = handleDegenerateCase(currentSolution.allocations, costs, m, n);
+      currentSolution.allocations = updatedAllocations;
+      currentSolution.epsilonGrid = createEpsilonGridFromAllocations(updatedAllocations, m, n);
 
       steps.push({
         type: "allocation",
         description: "Degenerate fix: ε allocated",
         remainingSupply: [...problem.supply],
         remainingDemand: [...problem.demand],
-        allAllocations: updatedAllocations,
-      });
+        allAllocations: updatedAllocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid.map(row => [...row]), // Deep copy
+      } as AllocationStep);
 
-      currentSolution = {
-        ...currentSolution,
-        allocations: updatedAllocations,
-        totalCost: calculateTotalCost(updatedAllocations, costs),
+      currentSolution.totalCost = calculateTotalCost(updatedAllocations, costs);
+      // Update bestSolution if this degenerate fix leads to a better state (unlikely but for completeness)
+      if (currentSolution.totalCost < bestSolution.totalCost) {
+         bestSolution = { ...currentSolution, allocations: currentSolution.allocations.map(a => ({...a})), epsilonGrid: currentSolution.epsilonGrid.map(row => [...row]) };
       }
-
-      iteration++
-      continue
+      
+      iteration++;
+      continue;
     }
 
-    // Step 2: Calculate u and v values (dual variables)
-    const { uValues, vValues, success } = calculateUVValues(currentSolution.allocations, costs)
+    const { uValues, vValues, success } = calculateUVValues(currentSolution.allocations, costs);
 
     if (!success) {
       steps.push({
         type: "uv",
         description: `Iteration ${iteration}: Failed to calculate U and V values. The problem may be degenerate.`,
-      })
-      break
+        allAllocations: currentSolution.allocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]), // Deep copy
+      } as UVStep);
+      break;
     }
 
-    // Step 3: Calculate opportunity costs for non-basic cells
-    const opportunityCosts = calculateOpportunityCosts(uValues, vValues, costs)
+    const opportunityCosts = calculateOpportunityCosts(uValues, vValues, costs);
+    let enteringCell = findEnteringCell(opportunityCosts, currentSolution.allocations);
 
-    // Step 4: Find the entering variable (cell with most NEGATIVE opportunity cost)
-    let enteringCell = findEnteringCell(opportunityCosts, currentSolution.allocations)
-
-    // If no negative opportunity costs, solution is optimal
     if (!enteringCell) {
-      isOptimal = true
+      isOptimal = true;
       steps.push({
         type: "uv",
         description: `Iteration ${iteration}: Solution is optimal. No negative opportunity costs found.`,
         uValues,
         vValues,
         opportunityCosts,
-      })
-      break
+        allAllocations: currentSolution.allocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]), // Deep copy
+      } as UVStep);
+      break;
     }
 
-    // Step 5: Find the cycle (closed loop)
-    let cycle = findCycle(enteringCell, currentSolution.allocations, supply.length, demand.length)
+    let cycle = findCycle(enteringCell, currentSolution.allocations, m, n);
 
-    // If cycle is invalid (less than 4 cells), we can't improve this solution path
     if (!cycle || cycle.length < 4) {
-      steps.push({
+      // ... (handling for invalid cycle, trying next best entering cell - simplified here)
+       steps.push({
         type: "uv",
-        description: `Iteration ${iteration}: Could not find a valid cycle for entering cell (S${enteringCell.source + 1},D${
-          enteringCell.destination + 1
-        }). Trying next best entering cell.`,
-        uValues,
-        vValues,
-        opportunityCosts,
-        enteringCell
-      });
-      
-      const nextBestEnteringCell = findNextBestEnteringCell(
-        opportunityCosts, 
-        currentSolution.allocations,
-        enteringCell // exclude this cell from consideration
-      );
-      
+        description: `Iteration ${iteration}: Could not find a valid cycle for entering cell (S${enteringCell.source + 1},D${enteringCell.destination + 1}).`,
+        uValues, vValues, opportunityCosts, enteringCell,
+        allAllocations: currentSolution.allocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]), // Deep copy
+      } as UVStep);
+      // Attempt to find next best or break
+      const nextBestEnteringCell = findNextBestEnteringCell(opportunityCosts, currentSolution.allocations, enteringCell);
       if (nextBestEnteringCell) {
-        // Try with next best entering cell
-        const nextCycle = findCycle(nextBestEnteringCell, currentSolution.allocations, supply.length, demand.length);
-        if (nextCycle && nextCycle.length >= 4) {
-          // Found a valid cycle with the next best cell
-          enteringCell = nextBestEnteringCell;
-          cycle = nextCycle;
-        } else {
-          // If still no valid cycle, this solution might be optimal or degenerate
-          isOptimal = true;
-          break;
+        enteringCell = nextBestEnteringCell;
+        cycle = findCycle(enteringCell, currentSolution.allocations, m, n);
+        if (!cycle || cycle.length < 4) {
+            isOptimal = true; break; // Still no valid cycle
         }
       } else {
-        // No more negative opportunity costs to try
-        isOptimal = true;
-        break;
+        isOptimal = true; break; // No other entering cells
       }
     }
-
-    // Step 6: Find the leaving variable (smallest allocation among cells with "-" sign)
-    const leavingValue = findLeavingVariable(cycle, currentSolution.allocations)
     
-    // If leaving value is too small, solution might be degenerate
-    if (leavingValue < 0.000001) {
-      steps.push({
+    const leavingValue = findLeavingVariable(cycle, currentSolution.allocations);
+
+    if (leavingValue < 0.000001 && Math.abs(leavingValue - 0.000001) > 1e-9) { // If it's effectively zero but not epsilon itself
+       steps.push({
         type: "uv",
         description: `Iteration ${iteration}: Leaving value is too small. Potential degeneracy. Skipping.`,
-        uValues,
-        vValues,
-        opportunityCosts,
-        enteringCell
-      });
-      
+        uValues, vValues, opportunityCosts, enteringCell,
+        allAllocations: currentSolution.allocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]),
+      } as UVStep);
       iteration++;
       continue;
     }
 
-    // Add step
     steps.push({
       type: "uv",
-      description: `Iteration ${iteration}: Entering cell (S${enteringCell.source + 1},D${
-        enteringCell.destination + 1
-      }) with opportunity cost ${opportunityCosts[enteringCell.source][enteringCell.destination].toFixed(2)}`,
-      uValues,
-      vValues,
-      opportunityCosts,
-      enteringCell,
-      leavingValue,
-      cycle,
-    })
+      description: `Iteration ${iteration}: Entering cell (S${enteringCell.source + 1},D${enteringCell.destination + 1}) with opportunity cost ${opportunityCosts[enteringCell.source][enteringCell.destination].toFixed(2)}`,
+      uValues, vValues, opportunityCosts, enteringCell, leavingValue, cycle,
+      allAllocations: currentSolution.allocations.map(a => ({...a})), // State before update
+      epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]),   // Grid for state before update
+    } as UVStep);
 
-    // Step 7: Update the solution
     const newAllocations = updateAllocations(currentSolution.allocations, cycle, leavingValue);
     const newTotalCost = calculateTotalCost(newAllocations, costs);
-    
-    const newSolution = {
-      ...currentSolution,
-      allocations: newAllocations,
-      totalCost: newTotalCost
-    };
-    
-    // Only accept the new solution if it actually improves the cost
-    if (newTotalCost < currentSolution.totalCost) {
-      currentSolution = newSolution;
-      
-      // Update best solution if the current one is better
-      if (currentSolution.totalCost < bestSolution.totalCost) {
-        bestSolution = { ...currentSolution };
-      }
-    } else {
-      // If the new solution doesn't improve the cost, we've reached optimality
-      // or the algorithm is stuck in a loop - break and use the best solution so far
+
+    currentSolution.allocations = newAllocations;
+    currentSolution.totalCost = newTotalCost;
+    currentSolution.epsilonGrid = createEpsilonGridFromAllocations(newAllocations, m, n);
+
+
+    if (newTotalCost < bestSolution.totalCost - 1e-9) { // Use a small tolerance for improvement
+      bestSolution = { ...currentSolution, allocations: currentSolution.allocations.map(a => ({...a})), epsilonGrid: currentSolution.epsilonGrid.map(row => [...row]) };
+    } else if (newTotalCost >= currentSolution.totalCost && iteration > 1) { // If cost didn't improve or worsened
+        // Revert to bestSolution if current step didn't improve
+        // This handles cases where a step might be taken that doesn't strictly improve but is part of finding optimum
+        // However, if it worsens, it's better to stick to the previous best.
+        // For simplicity here, if no strict improvement, consider it optimal with current bestSolution.
+        // A more robust handling might be needed for complex scenarios.
+        // For now, if no strict improvement, consider it optimal with current bestSolution.
       isOptimal = true;
       steps.push({
         type: "uv",
-        description: `Iteration ${iteration}: No further improvement possible. Current solution is optimal.`,
-      });
+        description: `Iteration ${iteration}: No further cost improvement. Using best solution found.`,
+        allAllocations: currentSolution.allocations.map(a => ({...a})),
+        epsilonGrid: currentSolution.epsilonGrid?.map(row => [...row]),
+      } as UVStep);
       break;
     }
-
+    
     iteration++;
   }
 
-  // Return the best solution found with all steps
   return {
-    ...bestSolution,
+    ...bestSolution, // bestSolution already has its allocations and epsilonGrid
     steps: [...steps],
-    isOptimal: true,
+    isOptimal: true, // Assume optimal or max iterations reached
   };
 }
 

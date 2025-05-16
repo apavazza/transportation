@@ -40,6 +40,7 @@ export interface AllocationStep {
   remainingSupply?: number[]
   remainingDemand?: number[]
   allAllocations?: Allocation[]
+  epsilonGrid?: boolean[][]
 }
 
 export interface UVStep {
@@ -51,6 +52,8 @@ export interface UVStep {
   enteringCell?: Cell
   leavingValue?: number
   cycle?: Cell[]
+  allAllocations?: Allocation[]
+  epsilonGrid?: boolean[][]
 }
 
 export type Step = PenaltyStep | AllocationStep | UVStep
@@ -60,6 +63,7 @@ export interface Solution {
   totalCost: number
   steps: Step[]
   isOptimal?: boolean
+  epsilonGrid?: boolean[][]
 }
 
 export interface OptimizationResult {

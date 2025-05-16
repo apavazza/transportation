@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 
-import type { TransportationProblem } from "./types"
+import type { TransportationProblem, Allocation } from "./types"
 
 export function isBalanced(problem: TransportationProblem): boolean {
   const totalSupply = problem.supply.reduce((sum, s) => sum + s, 0)
@@ -196,4 +196,28 @@ export function findMaxPenaltyCell(
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+export const EPSILON_VALUE = 0.000001 // Define your epsilon magnitude
+export const EPSILON_THRESHOLD = 1e-9 // Define a small threshold for float comparison
+
+export const createEpsilonGridFromAllocations = (
+  allocs: Allocation[] | undefined, // Make allocs potentially undefined
+  numSources: number,
+  numDestinations: number,
+): boolean[][] => {
+  const grid = Array(numSources)
+    .fill(null)
+    .map(() => Array(numDestinations).fill(false))
+
+  if (allocs) {
+    // Check if allocs is provided
+    for (const alloc of allocs) {
+      // A cell is epsilon if its value is very close to EPSILON_VALUE
+      if (Math.abs(alloc.value - EPSILON_VALUE) < EPSILON_THRESHOLD) {
+        grid[alloc.source][alloc.destination] = true
+      }
+    }
+  }
+  return grid
 }
