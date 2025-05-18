@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@eslint/eslintrc':
-        specifier: ^3.3.1
-        version: 3.3.1
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -33,6 +30,9 @@ importers:
         specifier: ^1.0.7
         version: 1.0.7(tailwindcss@3.4.17)
     devDependencies:
+      '@eslint/eslintrc':
+        specifier: ^3.3.1
+        version: 3.3.1
       '@types/node':
         specifier: ^22.15.18
         version: 22.15.18
