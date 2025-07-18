@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react"
 import Counter from "./counter"
-import { convertMixedTransshipment, createTransshipmentProblem, convertToTransportation } from "@/src/lib/transshipment"
 import type { TransportationProblem, Method } from "@/src/lib/types"
 
 interface InputFormProps {
-  onSolve: (problem: TransportationProblem, method: Method, useUVOptimization: boolean) => void
+  onSolve: (
+    problem: TransportationProblem,
+    method: Method,
+    useUVOptimization: boolean,
+    originalProblemForDisplay?: TransportationProblem,
+  ) => void
   onReset?: () => void
   initialMethod?: Method
   initialUseUVOptimization?: boolean
@@ -87,12 +91,29 @@ export default function InputForm({
     }
     setSupply(newSupply)
 
-    // Update costs matrix
-    const newCosts: (number | string)[][] = costs.slice(0, newValue).map((row) => row.slice(0, destinations))
-    while (newCosts.length < newValue) {
-      newCosts.push(Array(destinations).fill(""))
+    // Update costs matrix based on transshipment type
+    if (useTransshipment && transshipmentType === "mixed") {
+      // For mixed transshipment, create square matrix
+      const totalNodes = newValue + destinations;
+      const newCosts: (number | string)[][] = Array(totalNodes)
+        .fill(0)
+        .map((_, i) => Array(totalNodes).fill(0).map((_, j) => {
+          if (i === j) return 0; // Diagonal is zero
+          // Preserve existing values if they exist
+          return costs[i]?.[j] ?? "";
+        }));
+      setCosts(newCosts);
+    } else if (useTransshipment && transshipmentType === "dedicated") {
+      // For dedicated transshipment, update the matrix structure
+      updateDedicatedTransshipmentCosts(newValue, destinations, transshipmentCount)
+    } else {
+      // For regular transportation, rectangular matrix
+      const newCosts: (number | string)[][] = costs.slice(0, newValue).map((row) => row.slice(0, destinations))
+      while (newCosts.length < newValue) {
+        newCosts.push(Array(destinations).fill(""))
+      }
+      setCosts(newCosts)
     }
-    setCosts(newCosts)
 
     // Update transshipment indices if using mixed transshipment
     if (useTransshipment && transshipmentType === "mixed") {
@@ -116,19 +137,36 @@ export default function InputForm({
     }
     setDemand(newDemand)
 
-    // Update costs matrix
-    const newCosts: (number | string)[][] = costs.map((row) => {
-      const newRow = [...row]
-      if (newValue > row.length) {
-        for (let i = row.length; i < newValue; i++) {
-          newRow.push("")
+    // Update costs matrix based on transshipment type
+    if (useTransshipment && transshipmentType === "mixed") {
+      // For mixed transshipment, create square matrix
+      const totalNodes = sources + newValue;
+      const newCosts: (number | string)[][] = Array(totalNodes)
+        .fill(0)
+        .map((_, i) => Array(totalNodes).fill(0).map((_, j) => {
+          if (i === j) return 0; // Diagonal is zero
+          // Preserve existing values if they exist
+          return costs[i]?.[j] ?? "";
+        }));
+      setCosts(newCosts);
+    } else if (useTransshipment && transshipmentType === "dedicated") {
+      // For dedicated transshipment, update the matrix structure
+      updateDedicatedTransshipmentCosts(sources, newValue, transshipmentCount)
+    } else {
+      // For regular transportation, rectangular matrix
+      const newCosts: (number | string)[][] = costs.map((row) => {
+        const newRow = [...row]
+        if (newValue > row.length) {
+          for (let i = row.length; i < newValue; i++) {
+            newRow.push("")
+          }
+        } else {
+          newRow.splice(newValue)
         }
-      } else {
-        newRow.splice(newValue)
-      }
-      return newRow
-    })
-    setCosts(newCosts)
+        return newRow
+      })
+      setCosts(newCosts)
+    }
 
     // Update transshipment indices if using mixed transshipment
     if (useTransshipment && transshipmentType === "mixed") {
@@ -186,7 +224,14 @@ export default function InputForm({
             newCosts[i][j] = costs[i]?.[j] ?? ""
           } else {
             // Transshipment to Transshipment costs
-            newCosts[i][j] = costs[i]?.[j] ?? ""
+            const transshipmentRowIndex = i - supplyCount
+            const transshipmentColIndex = j - demandCount
+            if (transshipmentRowIndex === transshipmentColIndex) {
+              // Diagonal T-T cells should always be 0
+              newCosts[i][j] = 0
+            } else {
+              newCosts[i][j] = costs[i]?.[j] ?? ""
+            }
           }
         }
       }
@@ -208,6 +253,20 @@ export default function InputForm({
   }
 
   const handleCostChange = (sourceIndex: number, destIndex: number, value: string) => {
+    // For dedicated transshipment, prevent changing diagonal T-T costs (they should stay 0)
+    if (useTransshipment && transshipmentType === "dedicated") {
+      const isTransshipmentRow = sourceIndex >= sources
+      const isTransshipmentCol = destIndex >= destinations
+      if (isTransshipmentRow && isTransshipmentCol) {
+        const transshipmentRowIndex = sourceIndex - sources
+        const transshipmentColIndex = destIndex - destinations
+        if (transshipmentRowIndex === transshipmentColIndex) {
+          // Don't allow changing diagonal T-T costs
+          return
+        }
+      }
+    }
+
     const newCosts = [...costs]
     if (!newCosts[sourceIndex]) {
       newCosts[sourceIndex] = []
@@ -249,7 +308,7 @@ export default function InputForm({
     }
   }
 
-  // Add effect to automatically set all nodes as transient when using mixed transshipment
+  // Set transshipment indices when enabling mixed transshipment
   useEffect(() => {
     if (useTransshipment && transshipmentType === "mixed") {
       const allIndices: number[] = []
@@ -260,6 +319,8 @@ export default function InputForm({
         allIndices.push(sources + i)
       }
       setTransshipmentIndices(allIndices)
+    } else {
+      setTransshipmentIndices([])
     }
   }, [sources, destinations, useTransshipment, transshipmentType])
 
@@ -292,103 +353,140 @@ export default function InputForm({
   }
 
   // Update the handleSolve function to handle transshipment problems
-  const handleSolve = () => {
+  const handleSolve = useCallback(() => {
     try {
-      // Declare the problem variable at the beginning
-      let problem: TransportationProblem | undefined;
-      
-      // Check for empty fields
-      if (supply.some((s) => s === "")) {
-        setError("All supply values must be filled")
-        return
-      }
-
-      if (demand.some((d) => d === "")) {
-        setError("All demand values must be filled")
-        return
-      }
-
-      // Check if costs are filled based on problem type
-      if (!useTransshipment) {
-        // Regular transportation problem
+      // For transshipment problems, we need to validate the square matrix differently
+      if (useTransshipment && transshipmentType === "mixed") {
+        const totalNodes = sources + destinations;
+        
+        // Check supply and demand arrays
+        if (supply.some((s) => s === "")) {
+          setError("All supply values must be filled")
+          return
+        }
+        if (demand.some((d) => d === "")) {
+          setError("All demand values must be filled")
+          return
+        }
+        
+        // Check costs matrix (skip diagonal elements which should be 0)
+        for (let i = 0; i < totalNodes; i++) {
+          for (let j = 0; j < totalNodes; j++) {
+            if (i === j) continue; // Skip diagonal
+            if (!costs[i] || costs[i][j] === "") {
+              setError("All cost cells must be filled")
+              return
+            }
+          }
+        }
+      } else if (useTransshipment && transshipmentType === "dedicated") {
+        // Dedicated transshipment validation
+        if (supply.some((s) => s === "")) {
+          setError("All supply values must be filled")
+          return
+        }
+        if (demand.some((d) => d === "")) {
+          setError("All demand values must be filled")
+          return
+        }
+        
+        // For dedicated transshipment, validate costs more specifically
+        // Matrix structure: [S1, S2, ..., T1, T2, ...] x [D1, D2, ..., T1, T2, ...]
+        const totalRows = sources + transshipmentCount
+        const totalCols = destinations + transshipmentCount
+        
+        for (let i = 0; i < totalRows; i++) {
+          for (let j = 0; j < totalCols; j++) {
+            // Check if this cell should be validated
+            const isSupplyRow = i < sources
+            const isTransshipmentRow = i >= sources
+            const isDemandCol = j < destinations
+            const isTransshipmentCol = j >= destinations
+            
+            // All supply-to-demand, supply-to-transshipment, and transshipment-to-demand costs must be filled
+            // Transshipment-to-transshipment costs are optional (can be empty)
+            const shouldValidate = (isSupplyRow && isDemandCol) || 
+                                   (isSupplyRow && isTransshipmentCol) || 
+                                   (isTransshipmentRow && isDemandCol)
+            
+            if (shouldValidate && (!costs[i] || costs[i][j] === "")) {
+              setError("All required cost cells must be filled")
+              return
+            }
+          }
+        }
+      } else {
+        // Regular validation for non-transshipment problems
+        if (supply.some((s) => s === "")) {
+          setError("All supply values must be filled")
+          return
+        }
+        if (demand.some((d) => d === "")) {
+          setError("All demand values must be filled")
+          return
+        }
         if (costs.some((row) => row.some((cost) => cost === ""))) {
           setError("All cost cells must be filled")
           return
         }
-      } else if (transshipmentType === "mixed") {
-        // Mixed transshipment problem
-        try {
-          // For mixed transshipment, make sure all nodes are in transshipmentIndices
-          const allIndices: number[] = []
-          for (let i = 0; i < sources; i++) {
-            allIndices.push(i)
-          }
-          for (let i = 0; i < destinations; i++) {
-            allIndices.push(sources + i)
-          }
-          
-          // Mixed transshipment
-          const totalNodes = sources + destinations
-          
-          // Check that all costs except diagonals are filled
-          for (let i = 0; i < totalNodes; i++) {
-            for (let j = 0; j < totalNodes; j++) {
-              // Skip diagonal elements (which are set to 0)
-              if (i === j) continue
-              
-              // Check if this cell is empty
-              if (!costs[i] || costs[i][j] === "") {
-                setError("All cost cells must be filled")
-                return
-              }
-            }
-          }
-
-          // Convert values to numbers for the solver
-          const numericSupply = supply.map(s => typeof s === "string" ? parseFloat(s) : s);
-          const numericDemand = demand.map(d => typeof d === "string" ? parseFloat(d) : d);
-          const numericCosts = costs.map(row => 
-            row.map(cell => typeof cell === "string" ? parseFloat(cell) : (cell as number))
-          );
-          
-          // Use the library function to create the transshipment problem
-          const transshipmentProblem = convertMixedTransshipment(
-            numericSupply as number[],
-            numericDemand as number[],
-            numericCosts as number[][],
-            allIndices
-          );
-          
-          // Convert to transportation problem
-          problem = convertToTransportation(transshipmentProblem);
-        } catch (err) {
-          console.error("Error in mixed transshipment conversion:", err);
-          setError(`Error in transshipment conversion: ${err instanceof Error ? err.message : String(err)}`);
-          return;
-        }
-      } else {
-        // Dedicated transshipment problem
-        // Conversion will happen later
       }
 
       // Convert all values to numbers
-      const numericSupply: number[] = supply.map((s) => (typeof s === "string" ? Number(s) : s))
-      const numericDemand: number[] = demand.map((d) => (typeof d === "string" ? Number(d) : d))
+      const originalSupply: number[] = supply.map((s) => (typeof s === "string" ? Number(s) : s))
+      const originalDemand: number[] = demand.map((d) => (typeof d === "string" ? Number(d) : d))
       const numericCosts: number[][] = costs.map((row) =>
         row.map((cost) => (typeof cost === "string" ? Number(cost) : cost)),
       )
 
+      // For mixed transshipment, extend supply and demand arrays to match the square matrix
+      // But don't modify the state - only create new arrays for the problem
+      let problemSupply: number[] = originalSupply
+      let problemDemand: number[] = originalDemand
+      let bufferAmount: number | undefined = undefined
+
+      if (useTransshipment && transshipmentType === "mixed") {
+        const totalSupply = originalSupply.reduce((sum, s) => sum + s, 0)
+        const totalDemand = originalDemand.reduce((sum, d) => sum + d, 0)
+
+        if (totalSupply === totalDemand) {
+          // If balanced, add a buffer to prevent incorrect paths
+          bufferAmount = totalSupply
+          const extendedSupply = [...originalSupply, ...Array(destinations).fill(0)]
+          const extendedDemand = [...Array(sources).fill(0), ...originalDemand]
+
+          problemSupply = extendedSupply.map((s) => s + bufferAmount!)
+          problemDemand = extendedDemand.map((d) => d + bufferAmount!)
+        } else {
+          // If unbalanced, let the solver handle it by adding a dummy node.
+          // First, extend the arrays with zeros.
+          problemSupply = [...originalSupply, ...Array(destinations).fill(0)]
+          problemDemand = [...Array(sources).fill(0), ...originalDemand]
+        }
+      } else if (useTransshipment && transshipmentType === "dedicated") {
+        // For dedicated transshipment, extend arrays with transshipment nodes
+        // Transshipment supply = sum of all actual supplies
+        // Transshipment demand = sum of all actual demands
+        const totalActualSupply = originalSupply.reduce((sum, s) => sum + s, 0)
+        const totalActualDemand = originalDemand.reduce((sum, d) => sum + d, 0)
+        
+        // Extend supply array: [S1, S2, ..., T1, T2, ...]
+        const transshipmentSupplies = Array(transshipmentCount).fill(totalActualSupply)
+        problemSupply = [...originalSupply, ...transshipmentSupplies]
+        
+        // Extend demand array: [D1, D2, ..., T1, T2, ...]
+        const transshipmentDemands = Array(transshipmentCount).fill(totalActualDemand)
+        problemDemand = [...originalDemand, ...transshipmentDemands]
+      }
+
       // Validate inputs
-      if (numericSupply.some((s) => s <= 0)) {
-        setError("Supply values must be positive")
+      if (problemSupply.some((s) => s < 0)) {
+        setError("Supply values cannot be negative")
         return
       }
-
-      if (numericDemand.some((d) => d <= 0)) {
-        setError("Demand values must be positive")
+      if (problemDemand.some((d) => d < 0)) {
+        setError("Demand values cannot be negative")
         return
       }
-
       if (numericCosts.some((row) => row.some((cost) => cost < 0))) {
         setError("Costs cannot be negative")
         return
@@ -396,8 +494,8 @@ export default function InputForm({
 
       // For transshipment problems, check if total supply equals total demand
       if (useTransshipment) {
-        const totalSupply = numericSupply.reduce((sum, s) => sum + s, 0)
-        const totalDemand = numericDemand.reduce((sum, d) => sum + d, 0)
+        const totalSupply = problemSupply.reduce((sum, s) => sum + s, 0)
+        const totalDemand = problemDemand.reduce((sum, d) => sum + d, 0)
 
         if (totalSupply !== totalDemand) {
           setError("Total supply must equal total demand for transshipment problems")
@@ -405,40 +503,220 @@ export default function InputForm({
         }
       }
 
-      if (!useTransshipment) {
-        // Regular transportation problem
-        problem = {
-          supply: numericSupply,
-          demand: numericDemand,
-          costs: numericCosts,
-        }
-      } else if (transshipmentType === "mixed") {
-        // Skip this section as we already created the problem above
-      } else {
-        // Dedicated transshipment problem
-        const transshipmentProblem = createTransshipmentProblem(
-          numericSupply,
-          numericDemand,
-          transshipmentCount,
-          numericCosts,
-        )
-
-        // Convert to transportation problem
-        problem = convertToTransportation(transshipmentProblem)
+      // Create the transportation problem
+      const problem: TransportationProblem = {
+        supply: problemSupply,
+        demand: problemDemand,
+        costs: numericCosts,
+        isTransshipment: useTransshipment,
+        // Add metadata to help with solution display
+        originalSupply: originalSupply,
+        originalDemand: originalDemand,
+        transshipmentType: useTransshipment ? transshipmentType : undefined,
+        sourcesCount: sources,
+        destinationsCount: destinations,
+        bufferAmount: bufferAmount,
+        ...(useTransshipment && transshipmentType === "dedicated" && { transshipmentCount }),
       }
 
-      // Pass the problem to onSolve only if it's defined
-      if (problem) {
-        onSolve(problem, method, useUVOptimization)
-        setError(null)
-      } else {
-        setError("Error creating transportation problem")
+      // For display purposes, the original problem should not have the extended supply/demand
+      const originalProblemForDisplay: TransportationProblem = {
+        supply: originalSupply,
+        demand: originalDemand,
+        costs: numericCosts,
+        isTransshipment: useTransshipment,
+        originalSupply: originalSupply,
+        originalDemand: originalDemand,
+        transshipmentType: useTransshipment ? transshipmentType : undefined,
+        sourcesCount: sources,
+        destinationsCount: destinations,
+        bufferAmount: bufferAmount,
+        ...(useTransshipment && transshipmentType === "dedicated" && { transshipmentCount }),
       }
+
+      // Pass the problem to onSolve - it will handle it like a regular transportation problem
+      onSolve(problem, method, useUVOptimization, originalProblemForDisplay)
+      setError(null)
     } catch (err) {
       setError("Error solving the problem. Please check your inputs.")
       console.error(err)
     }
-  }
+  }, [supply, demand, costs, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, method, useUVOptimization, onSolve])
+
+  // Load from query parameters on component mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    
+    // Load basic parameters
+    const methodParam = urlParams.get('method') as Method | null
+    const uvParam = urlParams.get('uv')
+    const transshipmentParam = urlParams.get('transshipment')
+    const transshipmentTypeParam = urlParams.get('transshipmentType') as "mixed" | "dedicated" | null
+    const sourcesParam = urlParams.get('sources') || urlParams.get('sourcesCount')
+    const destinationsParam = urlParams.get('destinations') || urlParams.get('destinationsCount') || urlParams.get('dests')
+    const transshipmentCountParam = urlParams.get('transshipmentCount')
+    const supplyParam = urlParams.get('supply')
+    const demandParam = urlParams.get('demand')
+    const costsParam = urlParams.get('costs')
+
+    let shouldSolve = false
+
+    if (methodParam && ['nwcm', 'lcm', 'vam'].includes(methodParam)) {
+      setMethod(methodParam)
+      shouldSolve = true
+    }
+
+    if (uvParam) {
+      setUseUVOptimization(uvParam === 'true')
+    }
+
+    if (transshipmentParam) {
+      setUseTransshipment(transshipmentParam === 'true')
+      shouldSolve = true
+    }
+
+    if (transshipmentTypeParam && ['mixed', 'dedicated'].includes(transshipmentTypeParam)) {
+      setTransshipmentType(transshipmentTypeParam)
+    }
+
+    if (sourcesParam) {
+      const sourcesCount = parseInt(sourcesParam)
+      if (!isNaN(sourcesCount) && sourcesCount >= 2 && sourcesCount <= 10) {
+        setSources(sourcesCount)
+        shouldSolve = true
+      }
+    }
+
+    if (destinationsParam) {
+      const destinationsCount = parseInt(destinationsParam)
+      if (!isNaN(destinationsCount) && destinationsCount >= 2 && destinationsCount <= 10) {
+        setDestinations(destinationsCount)
+        shouldSolve = true
+      }
+    }
+
+    if (transshipmentCountParam) {
+      const transCount = parseInt(transshipmentCountParam)
+      if (!isNaN(transCount) && transCount >= 1 && transCount <= 5) {
+        setTransshipmentCount(transCount)
+      }
+    }
+
+    if (supplyParam) {
+      try {
+        const supplyValues = supplyParam.split(',').map(s => parseFloat(s.trim()))
+        if (supplyValues.every(v => !isNaN(v))) {
+          setSupply(supplyValues)
+          shouldSolve = true
+        }
+      } catch (e) {
+        console.error('Error parsing supply parameter:', e)
+      }
+    }
+
+    if (demandParam) {
+      try {
+        const demandValues = demandParam.split(',').map(d => parseFloat(d.trim()))
+        if (demandValues.every(v => !isNaN(v))) {
+          setDemand(demandValues)
+          shouldSolve = true
+        }
+      } catch (e) {
+        console.error('Error parsing demand parameter:', e)
+      }
+    }
+
+    if (costsParam) {
+      try {
+        const costRows = costsParam.split(';')
+        const costMatrix = costRows.map(row => 
+          row.split(',').map(cost => parseFloat(cost.trim()))
+        )
+        if (costMatrix.every(row => row.every(cost => !isNaN(cost)))) {
+          setCosts(costMatrix)
+          shouldSolve = true
+        }
+      } catch (e) {
+        console.error('Error parsing costs parameter:', e)
+      }
+    }
+
+    // Auto-solve if we have all parameters
+    if (shouldSolve && supplyParam && demandParam && costsParam) {
+      // Set a flag to auto-solve after all state updates
+      setTimeout(() => {
+        try {
+          // Trigger solve by creating a custom event or using a state flag
+          const autoSolveEvent = new CustomEvent('autoSolve')
+          window.dispatchEvent(autoSolveEvent)
+        } catch (error) {
+          console.error('Error setting up auto-solve:', error)
+        }
+      }, 200)
+    }
+  }, [])
+
+  // Auto-solve when URL parameters are loaded
+  useEffect(() => {
+    const handleAutoSolve = () => {
+      try {
+        handleSolve()
+      } catch (error) {
+        console.error('Error auto-solving from URL parameters:', error)
+      }
+    }
+
+    window.addEventListener('autoSolve', handleAutoSolve)
+    return () => window.removeEventListener('autoSolve', handleAutoSolve)
+  }, [handleSolve])
+
+  // Update URL when parameters change
+  useEffect(() => {
+    const updateURL = () => {
+      const params = new URLSearchParams()
+      
+      params.set('method', method)
+      params.set('uv', useUVOptimization.toString())
+      
+      if (useTransshipment) {
+        params.set('transshipment', 'true')
+        params.set('transshipmentType', transshipmentType)
+        
+        if (transshipmentType === 'dedicated') {
+          params.set('transshipmentCount', transshipmentCount.toString())
+        }
+      }
+      
+      params.set('sources', sources.toString())
+      params.set('destinations', destinations.toString())
+      
+      // Only add supply/demand/costs if they're filled
+      const hasValidSupply = supply.every(s => s !== '' && !isNaN(Number(s)))
+      const hasValidDemand = demand.every(d => d !== '' && !isNaN(Number(d)))
+      const hasValidCosts = costs.every(row => row.every(cost => cost !== '' && !isNaN(Number(cost))))
+      
+      if (hasValidSupply) {
+        params.set('supply', supply.map(s => s.toString()).join(','))
+      }
+      
+      if (hasValidDemand) {
+        params.set('demand', demand.map(d => d.toString()).join(','))
+      }
+      
+      if (hasValidCosts) {
+        params.set('costs', costs.map(row => row.map(cost => cost.toString()).join(',')).join(';'))
+      }
+      
+      // Update URL without triggering page reload
+      const newURL = `${window.location.pathname}?${params.toString()}`
+      window.history.replaceState(null, '', newURL)
+    }
+
+    // Only update URL if we have meaningful data
+    if (sources > 0 && destinations > 0) {
+      updateURL()
+    }
+  }, [method, useUVOptimization, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, supply, demand, costs])
 
   // Determine if we should show the transshipment UI
   const showTransshipmentUI = useTransshipment
@@ -448,75 +726,6 @@ export default function InputForm({
 
   // Determine if we should show the dedicated transshipment UI
   const showDedicatedTransshipmentUI = showTransshipmentUI && transshipmentType === "dedicated"
-
-  // Add a function to reset diagonal elements to zero for mixed transshipment
-  const resetDiagonalToZero = useCallback(() => {
-    if (useTransshipment && transshipmentType === "mixed") {
-      const totalNodes = sources + destinations;
-      const newCosts = [...costs];
-
-      while (newCosts.length < totalNodes) {
-        newCosts.push(Array(totalNodes).fill(""));
-      }
-
-      for (let i = 0; i < totalNodes; i++) {
-        if (!newCosts[i]) {
-          newCosts[i] = Array(totalNodes).fill("");
-        }
-        while (newCosts[i].length < totalNodes) {
-          newCosts[i].push("");
-        }
-        newCosts[i][i] = 0;
-      }
-
-      setCosts(newCosts);
-    }
-  }, [useTransshipment, transshipmentType, sources, destinations, costs, setCosts]);
-
-  // Update effect to reset diagonal elements when dimensions change
-  useEffect(() => {
-    resetDiagonalToZero();
-  }, [resetDiagonalToZero]);
-
-  // Add a helper function to generate links for mixed transshipment
-  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
-  const generateLinks = (sources: number, destinations: number, costs: (number | string)[][]) => {
-    const links = [];
-    const totalNodes = sources + destinations;
-    
-    // Create links between all nodes based on cost matrix
-    for (let i = 0; i < totalNodes; i++) {
-      for (let j = 0; j < totalNodes; j++) {
-        // Skip self-loops for non-transshipment indices
-        if (i === j) continue;
-        
-        const cost = typeof costs[i]?.[j] === 'string' 
-          ? parseFloat(costs[i][j] as string) 
-          : (costs[i]?.[j] as number) || 0;
-          
-        if (!isNaN(cost) && cost < 999) {
-          links.push({
-            from: i,
-            to: j,
-            cost: cost,
-            flow: 0
-          });
-        }
-      }
-    }
-    
-    // Add self-loops for transshipment nodes with zero cost
-    for (let i = 0; i < totalNodes; i++) {
-      links.push({
-        from: i,
-        to: i,
-        cost: 0,
-        flow: 0
-      });
-    }
-    
-    return links;
-  };
 
   return (
     <div className="space-y-6">
@@ -557,9 +766,8 @@ export default function InputForm({
           checked={useTransshipment}
           onChange={(e) => setUseTransshipment(e.target.checked)}
           className="h-4 w-4 text-blue-600 rounded border-gray-300"
-          disabled
         />
-        <label htmlFor="use-transshipment" className="ml-2 text-sm font-medium text-gray-500">
+        <label htmlFor="use-transshipment" className="ml-2 text-sm font-medium">
           Enable Transshipment
         </label>
       </div>
@@ -961,26 +1169,41 @@ export default function InputForm({
                     {/* Transshipment to Transshipment costs */}
                     {Array.from({ length: transshipmentCount }).map((_, toTransIndex) => (
                       <td key={`cell-t-t-${transIndex}-${toTransIndex}`} className="p-2 border">
-                        <input
-                          type="number"
-                          min={0}
-                          value={costs[sources + transIndex]?.[destinations + toTransIndex] ?? ""}
-                          onChange={(e) =>
-                            handleCostChange(sources + transIndex, destinations + toTransIndex, e.target.value)
-                          }
-                          className="w-24 h-8 text-center border rounded-md"
-                          placeholder="Cost"
-                        />
+                        {transIndex === toTransIndex ? (
+                          // Diagonal T-T cells (same node) are hardcoded to 0
+                          <input
+                            type="number"
+                            value="0"
+                            readOnly
+                            className="w-24 h-8 text-center border rounded-md bg-gray-100"
+                            placeholder="0"
+                          />
+                        ) : (
+                          // Off-diagonal T-T cells are editable
+                          <input
+                            type="number"
+                            min={0}
+                            value={costs[sources + transIndex]?.[destinations + toTransIndex] ?? ""}
+                            onChange={(e) =>
+                              handleCostChange(sources + transIndex, destinations + toTransIndex, e.target.value)
+                            }
+                            className="w-24 h-8 text-center border rounded-md"
+                            placeholder="Cost"
+                          />
+                        )}
                       </td>
                     ))}
                     <td className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={0}
-                        value="0"
+                        value={supply.slice(0, sources).reduce((sum: number, s) => {
+                          const value = typeof s === 'number' ? s : parseFloat(s) || 0;
+                          return sum + value;
+                        }, 0)}
                         readOnly
                         className="w-24 h-8 text-center border rounded-md bg-blue-50"
-                        placeholder="0"
+                        placeholder="Auto"
                       />
                     </td>
                   </tr>
@@ -1001,16 +1224,19 @@ export default function InputForm({
                       />
                     </td>
                   ))}
-                  {/* Transshipment demand (should be zero) */}
+                  {/* Transshipment demand (should equal sum of actual demands) */}
                   {Array.from({ length: transshipmentCount }).map((_, index) => (
                     <td key={`trans-demand-${index}`} className="p-2 border bg-blue-50">
                       <input
                         type="number"
                         min={0}
-                        value="0"
+                        value={demand.slice(0, destinations).reduce((sum: number, d) => {
+                          const value = typeof d === 'number' ? d : parseFloat(d) || 0;
+                          return sum + value;
+                        }, 0)}
                         readOnly
                         className="w-24 h-8 text-center border rounded-md bg-blue-50"
-                        placeholder="0"
+                        placeholder="Auto"
                       />
                     </td>
                   ))}

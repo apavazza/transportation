@@ -9,6 +9,15 @@ export interface TransportationProblem {
   nodeTypes?: NodeType[] // Type of each node (supply, demand, or transshipment)
   isTransshipment?: boolean // Flag to indicate if this is a transshipment problem
   transshipmentCosts?: number[][] // Costs between all nodes (including transshipment nodes)
+
+  // Metadata for display
+  originalSupply?: number[]
+  originalDemand?: number[]
+  transshipmentType?: "mixed" | "dedicated"
+  sourcesCount?: number
+  destinationsCount?: number
+  bufferAmount?: number
+  transshipmentCount?: number
 }
 
 export interface Allocation {

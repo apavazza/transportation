@@ -23,47 +23,55 @@ export default function TransportationSolver() {
   const [isBalancedProblem, setIsBalancedProblem] = useState<boolean>(true)
 
   // Define handleSolve with useCallback to prevent it from changing on every render
-  const handleSolve = useCallback((originalProblem: TransportationProblem, method: Method, useUVOptimization: boolean) => {
-    setOriginalProblem(originalProblem)
-    setMethod(method)
-    setUseUVOptimization(useUVOptimization)
+  const handleSolve = useCallback(
+    (
+      problemToSolve: TransportationProblem,
+      method: Method,
+      useUVOptimization: boolean,
+      originalProblemForDisplay?: TransportationProblem,
+    ) => {
+      setOriginalProblem(originalProblemForDisplay || problemToSolve)
+      setMethod(method)
+      setUseUVOptimization(useUVOptimization)
 
-    // Check if the problem is balanced
-    const balanced = isBalanced(originalProblem)
-    setIsBalancedProblem(balanced)
+      // Check if the problem is balanced
+      const balanced = isBalanced(problemToSolve)
+      setIsBalancedProblem(balanced)
 
-    // Balance the problem if needed, but only for solving
-    const problemToSolve = balanced ? originalProblem : balanceProblem(originalProblem)
-    setProblem(problemToSolve)
+      // Balance the problem if needed, but only for solving
+      const problemForSolver = balanced ? problemToSolve : balanceProblem(problemToSolve)
+      setProblem(problemForSolver)
 
-    // Use the selected method
-    let initialSolution: Solution | null = null
+      // Use the selected method
+      let initialSolution: Solution | null = null
 
-    switch (method) {
-      case "nwcm":
-        initialSolution = solveNWCM(problemToSolve)
-        break
-      case "lcm":
-        initialSolution = solveLCM(problemToSolve)
-        break
-      case "vam":
-        initialSolution = solveVAM(problemToSolve)
-        break
-    }
+      switch (method) {
+        case "nwcm":
+          initialSolution = solveNWCM(problemForSolver)
+          break
+        case "lcm":
+          initialSolution = solveLCM(problemForSolver)
+          break
+        case "vam":
+          initialSolution = solveVAM(problemForSolver)
+          break
+      }
 
-    if (useUVOptimization && initialSolution) {
-      const optimizedSolution = optimizeWithMODI(problemToSolve, initialSolution)
-      setSolution({
-        initialSolution,
-        optimizedSolution,
-      })
-    } else {
-      setSolution(initialSolution)
-    }
+      if (useUVOptimization && initialSolution) {
+        const optimizedSolution = optimizeWithMODI(problemForSolver, initialSolution)
+        setSolution({
+          initialSolution,
+          optimizedSolution,
+        })
+      } else {
+        setSolution(initialSolution)
+      }
 
-    // Update URL with query parameters - use the original problem for the URL
-    updateQueryParams(originalProblem, method, useUVOptimization)
-  }, []);
+      // Update URL with query parameters - use the problem that was actually solved, not the original
+      updateQueryParams(problemToSolve, method, useUVOptimization)
+    },
+    [],
+  )
 
   // Automatically solve the problem when loaded from URL
   useEffect(() => {
@@ -103,7 +111,37 @@ export default function TransportationSolver() {
       isValid = false
     }
 
-    // 3. Number of sources and destinations
+    // 3. Transshipment parameters
+    const transshipmentParam = params.get("transshipment")
+    const transshipmentTypeParam = params.get("transshipmentType")
+    const sourcesCountParam = params.get("sourcesCount")
+    const destinationsCountParam = params.get("destinationsCount")
+
+    let isTransshipment = false
+    let transshipmentType: "mixed" | "dedicated" | undefined = undefined
+    let originalSourcesCount: number | undefined = undefined
+    let originalDestinationsCount: number | undefined = undefined
+
+    if (transshipmentParam === "true") {
+      isTransshipment = true
+      if (transshipmentTypeParam === "mixed" || transshipmentTypeParam === "dedicated") {
+        transshipmentType = transshipmentTypeParam
+      }
+      if (sourcesCountParam) {
+        const parsedSourcesCount = Number.parseInt(sourcesCountParam, 10)
+        if (!isNaN(parsedSourcesCount) && parsedSourcesCount >= 2) {
+          originalSourcesCount = parsedSourcesCount
+        }
+      }
+      if (destinationsCountParam) {
+        const parsedDestinationsCount = Number.parseInt(destinationsCountParam, 10)
+        if (!isNaN(parsedDestinationsCount) && parsedDestinationsCount >= 2) {
+          originalDestinationsCount = parsedDestinationsCount
+        }
+      }
+    }
+
+    // 4. Number of sources and destinations
     const sourcesParam = params.get("sources")
     const destsParam = params.get("dests")
 
@@ -128,41 +166,60 @@ export default function TransportationSolver() {
       }
     }
 
-    // 4. Supply values
+    // For mixed transshipment, determine actual array sizes
+    // If we have sourcesCount/destinationsCount params, those are the original dimensions
+    // and sources/dests params represent the original dimensions, but arrays are extended
+    let actualArraySources = sources
+    let actualArrayDestinations = destinations
+    
+    if (isTransshipment && transshipmentType === "mixed" && originalSourcesCount && originalDestinationsCount) {
+      // For mixed transshipment with metadata, the arrays are extended to square matrix
+      actualArraySources = originalSourcesCount + originalDestinationsCount
+      actualArrayDestinations = originalSourcesCount + originalDestinationsCount
+    } else if (isTransshipment && transshipmentType === "mixed") {
+      // For mixed transshipment without metadata, arrays are still extended
+      actualArraySources = sources + destinations
+      actualArrayDestinations = sources + destinations
+    }
+
+    // 5. Supply values
     const supplyParam = params.get("supply")
     let supply: number[] = []
 
     if (supplyParam) {
       const supplyValues = supplyParam.split(",").map((v) => Number.parseFloat(v))
-      if (supplyValues.length === sources && supplyValues.every((v) => !isNaN(v) && v > 0)) {
+      
+      if (supplyValues.length === actualArraySources && supplyValues.every((v) => !isNaN(v) && v >= 0)) {
         supply = supplyValues
       } else {
         isValid = false
       }
     }
 
-    // 5. Demand values
+    // 6. Demand values
     const demandParam = params.get("demand")
     let demand: number[] = []
 
     if (demandParam) {
       const demandValues = demandParam.split(",").map((v) => Number.parseFloat(v))
-      if (demandValues.length === destinations && demandValues.every((v) => !isNaN(v) && v > 0)) {
+      
+      if (demandValues.length === actualArrayDestinations && demandValues.every((v) => !isNaN(v) && v >= 0)) {
         demand = demandValues
       } else {
         isValid = false
       }
     }
 
-    // 6. Cost matrix
+    // 7. Cost matrix
     const costsParam = params.get("costs")
     let costs: number[][] = []
 
     if (costsParam) {
       const costValues = costsParam.split(";").map((row) => row.split(",").map((v) => Number.parseFloat(v)))
+      
       if (
-        costValues.length === sources &&
-        costValues.every((row) => row.length === destinations && row.every((v) => !isNaN(v) && v >= 0))
+        costValues.length === actualArraySources &&
+        costValues.every((row) => row.length === actualArrayDestinations && row.every((v) => !isNaN(v) && v >= 0))
       ) {
         costs = costValues
       } else {
@@ -172,16 +229,59 @@ export default function TransportationSolver() {
 
     // If all parameters are valid and we have all required data, create the problem and auto-solve
     if (isValid && supply.length > 0 && demand.length > 0 && costs.length > 0) {
+      let originalSupplyForDisplay: number[] = supply
+      let originalDemandForDisplay: number[] = demand
+      let bufferAmount: number | undefined = undefined
+
+      // For mixed transshipment, extract the original supply and demand from the extended arrays
+      if (isTransshipment && transshipmentType === "mixed" && originalSourcesCount && originalDestinationsCount) {
+        // Calculate buffer amount from the extended arrays
+        // For mixed transshipment with buffer: all values in first N positions should be equal (original + buffer)
+        // and all values in source positions of demand array should be 0 + buffer = buffer
+        const sourceSupplyValues = supply.slice(0, originalSourcesCount)
+        const sourceDemandValues = demand.slice(0, originalSourcesCount)
+        
+        // If source demand values are non-zero, we have a buffer
+        if (sourceDemandValues.some(d => d > 0)) {
+          bufferAmount = sourceDemandValues[0] // All should be the same buffer value
+          // Original supply is first N elements minus buffer
+          originalSupplyForDisplay = sourceSupplyValues.map(s => s - bufferAmount!)
+          // Original demand is last M elements minus buffer  
+          originalDemandForDisplay = demand.slice(-originalDestinationsCount).map(d => d - bufferAmount!)
+        } else {
+          // No buffer, just slice the arrays
+          originalSupplyForDisplay = supply.slice(0, originalSourcesCount)
+          originalDemandForDisplay = demand.slice(-originalDestinationsCount)
+        }
+      }
+
       const loadedProblem: TransportationProblem = {
-        supply,
-        demand,
+        supply: originalSupplyForDisplay, // Use original dimensions for input form
+        demand: originalDemandForDisplay, // Use original dimensions for input form
         costs,
+        isTransshipment,
+        transshipmentType,
+        sourcesCount: originalSourcesCount || sources,
+        destinationsCount: originalDestinationsCount || destinations,
+        bufferAmount,
+        originalSupply: originalSupplyForDisplay,
+        originalDemand: originalDemandForDisplay,
       }
 
       setOriginalProblem(loadedProblem)
       setAutoSolve(true)
     } else if (!isValid) {
       // If any parameter is invalid, clear the query string
+      console.log("Invalid URL parameters detected:", {
+        isValid,
+        supplyLength: supply.length,
+        demandLength: demand.length,
+        costsLength: costs.length,
+        expectedSupplyLength: actualArraySources,
+        expectedDemandLength: actualArrayDestinations,
+        actualSupply: supply,
+        actualDemand: demand
+      })
       window.history.replaceState(null, "", window.location.pathname)
     }
   }, [])
@@ -195,15 +295,41 @@ export default function TransportationSolver() {
     // UV Optimization
     params.set("uv", useUVOptimization.toString())
 
-    // Sources and destinations
-    params.set("sources", problem.supply.length.toString())
-    params.set("dests", problem.demand.length.toString())
+    // Transshipment indicator
+    params.set("transshipment", problem.isTransshipment ? "true" : "false")
 
-    // Supply values
-    params.set("supply", problem.supply.join(","))
+    // Transshipment type and related parameters
+    if (problem.isTransshipment && problem.transshipmentType) {
+      params.set("transshipmentType", problem.transshipmentType)
+      if (problem.sourcesCount) {
+        params.set("sourcesCount", problem.sourcesCount.toString())
+      }
+      if (problem.destinationsCount) {
+        params.set("destinationsCount", problem.destinationsCount.toString())
+      }
+      // Don't store bufferAmount in URL - it will be calculated from original supply/demand
+    }
 
-    // Demand values
-    params.set("demand", problem.demand.join(","))
+    // For mixed transshipment, use original dimensions in URL but store full arrays
+    if (problem.isTransshipment && problem.transshipmentType === "mixed" && problem.sourcesCount && problem.destinationsCount) {
+      // Sources and destinations (original dimensions)
+      params.set("sources", problem.sourcesCount.toString())
+      params.set("dests", problem.destinationsCount.toString())
+      
+      // Supply and demand values (full extended arrays with buffer)
+      params.set("supply", problem.supply.join(","))
+      params.set("demand", problem.demand.join(","))
+    } else {
+      // Sources and destinations
+      params.set("sources", problem.supply.length.toString())
+      params.set("dests", problem.demand.length.toString())
+
+      // Supply values
+      params.set("supply", problem.supply.join(","))
+
+      // Demand values
+      params.set("demand", problem.demand.join(","))
+    }
 
     // Cost matrix
     params.set("costs", problem.costs.map((row) => row.join(",")).join(";"))
@@ -288,15 +414,6 @@ export default function TransportationSolver() {
                     ? "source"
                     : "destination"}{" "}
                   has been added for solving.
-                </p>
-              </div>
-            )}
-
-            {problem.isTransshipment && (
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-                <p className="text-sm text-blue-800">
-                  <strong>Note:</strong> This is a transshipment problem that has been converted to a transportation
-                  problem for solving.
                 </p>
               </div>
             )}
