@@ -352,6 +352,47 @@ export default function InputForm({
     window.history.replaceState(null, "", window.location.pathname)
   }
 
+  // Function to update URL with current parameters
+  const updateURL = useCallback(() => {
+    const params = new URLSearchParams()
+    
+    params.set('method', method)
+    params.set('uv', useUVOptimization.toString())
+    
+    if (useTransshipment) {
+      params.set('transshipment', 'true')
+      params.set('transshipmentType', transshipmentType)
+      
+      if (transshipmentType === 'dedicated') {
+        params.set('transshipmentCount', transshipmentCount.toString())
+      }
+    }
+    
+    params.set('sources', sources.toString())
+    params.set('destinations', destinations.toString())
+    
+    // Only add supply/demand/costs if they're filled
+    const hasValidSupply = supply.every(s => s !== '' && !isNaN(Number(s)))
+    const hasValidDemand = demand.every(d => d !== '' && !isNaN(Number(d)))
+    const hasValidCosts = costs.every(row => row.every(cost => cost !== '' && !isNaN(Number(cost))))
+    
+    if (hasValidSupply) {
+      params.set('supply', supply.map(s => s.toString()).join(','))
+    }
+    
+    if (hasValidDemand) {
+      params.set('demand', demand.map(d => d.toString()).join(','))
+    }
+    
+    if (hasValidCosts) {
+      params.set('costs', costs.map(row => row.map(cost => cost.toString()).join(',')).join(';'))
+    }
+    
+    // Update URL without triggering page reload
+    const newURL = `${window.location.pathname}?${params.toString()}`
+    window.history.replaceState(null, '', newURL)
+  }, [method, useUVOptimization, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, supply, demand, costs])
+
   // Update the handleSolve function to handle transshipment problems
   const handleSolve = useCallback(() => {
     try {
@@ -537,11 +578,14 @@ export default function InputForm({
       // Pass the problem to onSolve - it will handle it like a regular transportation problem
       onSolve(problem, method, useUVOptimization, originalProblemForDisplay)
       setError(null)
+      
+      // Update URL with current parameters after successful solve
+      updateURL()
     } catch (err) {
       setError("Error solving the problem. Please check your inputs.")
       console.error(err)
     }
-  }, [supply, demand, costs, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, method, useUVOptimization, onSolve])
+  }, [supply, demand, costs, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, method, useUVOptimization, onSolve, updateURL])
 
   // Load from query parameters on component mount
   useEffect(() => {
@@ -669,54 +713,6 @@ export default function InputForm({
     window.addEventListener('autoSolve', handleAutoSolve)
     return () => window.removeEventListener('autoSolve', handleAutoSolve)
   }, [handleSolve])
-
-  // Update URL when parameters change
-  useEffect(() => {
-    const updateURL = () => {
-      const params = new URLSearchParams()
-      
-      params.set('method', method)
-      params.set('uv', useUVOptimization.toString())
-      
-      if (useTransshipment) {
-        params.set('transshipment', 'true')
-        params.set('transshipmentType', transshipmentType)
-        
-        if (transshipmentType === 'dedicated') {
-          params.set('transshipmentCount', transshipmentCount.toString())
-        }
-      }
-      
-      params.set('sources', sources.toString())
-      params.set('destinations', destinations.toString())
-      
-      // Only add supply/demand/costs if they're filled
-      const hasValidSupply = supply.every(s => s !== '' && !isNaN(Number(s)))
-      const hasValidDemand = demand.every(d => d !== '' && !isNaN(Number(d)))
-      const hasValidCosts = costs.every(row => row.every(cost => cost !== '' && !isNaN(Number(cost))))
-      
-      if (hasValidSupply) {
-        params.set('supply', supply.map(s => s.toString()).join(','))
-      }
-      
-      if (hasValidDemand) {
-        params.set('demand', demand.map(d => d.toString()).join(','))
-      }
-      
-      if (hasValidCosts) {
-        params.set('costs', costs.map(row => row.map(cost => cost.toString()).join(',')).join(';'))
-      }
-      
-      // Update URL without triggering page reload
-      const newURL = `${window.location.pathname}?${params.toString()}`
-      window.history.replaceState(null, '', newURL)
-    }
-
-    // Only update URL if we have meaningful data
-    if (sources > 0 && destinations > 0) {
-      updateURL()
-    }
-  }, [method, useUVOptimization, useTransshipment, transshipmentType, transshipmentCount, sources, destinations, supply, demand, costs])
 
   // Determine if we should show the transshipment UI
   const showTransshipmentUI = useTransshipment
